@@ -802,3 +802,160 @@ m.w.snow.spri1 <- lmer(no.spec ~ treatment + census + (1|site),
 summary(m.w.snow.spri1)
 
 plot(m.w.snow.spri1)
+
+
+
+###################################
+######### Diversity change ########
+###################################
+
+
+################################ Woody data #################################
+######### w.pest
+w.pest.shan.chan <- gathered.w.pest.spec.abun3
+
+Comm.w.pest.shch <- w.pest.shan.chan[,-c(1:5)]
+
+### Shannon index
+w.pest.shch <- diversity(Comm.w.pest.shch)
+hist(w.pest.shch)
+
+### Data frame for Shannon diversity
+Comm.w.pest.shch.dat <- data.frame(w.pest.shan.chan$pesticide, 
+                                   w.pest.shan.chan$exclosure, 
+                                   w.pest.shan.chan$site, 
+                                   w.pest.shan.chan$quadrat,
+                                   w.pest.shan.chan$census, 
+                                   w.pest.shch)
+### rename columns
+colnames(Comm.w.pest.shch.dat) <- c("pesticide","exclosure","site","quadrat","census","shan")
+
+w.pest.shan.15fa <- Comm.w.pest.shch.dat[Comm.w.pest.shch.dat$census=="15fa",]
+w.pest.shan.16fa <- Comm.w.pest.shch.dat[Comm.w.pest.shch.dat$census=="16fa",]
+
+w.pest.shan.15fa$new_col <- paste(w.pest.shan.15fa$site, w.pest.shan.15fa$exclosure, w.pest.shan.15fa$quadrat, sep="")
+w.pest.shan.16fa$new_col <- paste(w.pest.shan.16fa$site, w.pest.shan.16fa$exclosure, w.pest.shan.16fa$quadrat, sep="")
+
+####>>>>>>>>>>>>>>>>> final census (16fa) - initial census
+w.pest.shan.15fa$shan.16fa <- w.pest.shan.16fa[match(w.pest.shan.15fa$new_col, w.pest.shan.16fa$new_col),6]
+
+for (i in 1:dim(w.pest.shan.15fa)[1]) {
+  w.pest.shan.15fa$shch[i] <- w.pest.shan.15fa$shan.16fa[i]- w.pest.shan.15fa$shan[i]
+}
+View(w.pest.shan.15fa)
+
+## fit the model
+hist(w.pest.shan.15fa$shch)
+w.pest.shan.15fa$pesticide <- relevel(w.pest.shan.15fa$pesticide, ref = "W") 
+
+m.w.pest.shch1 <- lmer(shch ~ pesticide*exclosure + (1|site), data=w.pest.shan.15fa)
+m.w.pest.shch2 <- lmer(shch ~ pesticide + exclosure + (1|site), data=w.pest.shan.15fa)
+
+anova(m.w.pest.shch1, m.w.pest.shch2)
+
+drop1(m.w.pest.shch2)
+
+m.w.pest.shch3 <- lmer(shch ~ pesticide + exclosure + (1|site), weights= shan, data=w.pest.shan.15fa)
+
+summary(m.w.pest.shch3)
+
+m.w.pest.shch <- m.w.pest.shch2
+summary(m.w.pest.shch)
+plot(m.w.pest.shch)
+
+qqnorm(resid(m.w.pest.shch))
+####------------------------------------####
+
+
+
+########################
+####### w.snow #########
+########################
+w.snow.shch.dat <- w.snow.shan.new.dat
+
+Comm.w.snow.shch <- w.snow.shch.dat[,-c(1:4)]
+
+### Shannon index
+w.snow.shch <- diversity(Comm.w.snow.shch)
+hist(w.snow.shch)
+
+### Data frame for Shannon diversity
+Comm.w.snow.shch.dat <- data.frame(w.snow.shch.dat$treatment, 
+                                   w.snow.shch.dat$site, 
+                                   w.snow.shch.dat$quadrat,
+                                   w.snow.shch.dat$census, 
+                                   w.snow.shch)
+### rename columns
+colnames(Comm.w.snow.shch.dat) <- c("treatment","site","quadrat","census","shan")
+
+w.snow.shan.14fa <- Comm.w.snow.shch.dat[Comm.w.snow.shch.dat$census=="14fa",]
+w.snow.shan.16fa <- Comm.w.snow.shch.dat[Comm.w.snow.shch.dat$census=="16fa",]
+
+w.snow.shan.14fa$new_col <- paste(w.snow.shan.14fa$site, w.snow.shan.14fa$quadrat, sep="")
+w.snow.shan.16fa$new_col <- paste(w.snow.shan.16fa$site, w.snow.shan.16fa$quadrat, sep="")
+
+### final census (16fa) - initial census
+w.snow.shan.14fa$shan.16fa <- w.snow.shan.16fa[match(w.snow.shan.14fa$new_col, w.snow.shan.16fa$new_col),5]
+
+for (i in 1:dim(w.snow.shan.14fa)[1]) {
+  w.snow.shan.14fa$shch[i] <- w.snow.shan.14fa$shan.16fa[i]- w.snow.shan.14fa$shan[i]
+}
+View(w.snow.shan.14fa)
+
+## fit the model
+hist(w.snow.shan.14fa$shch)
+
+m.w.snow.shch <- lmer(shch ~ treatment + (1|site), data=w.snow.shan.14fa)
+## Weighted with initial shan
+m.w.snow.shch1 <- lmer(shch ~ treatment + (1|site), weights=shan, data=w.snow.shan.14fa)
+
+summary(m.w.snow.shch)
+summary(m.w.snow.shch1)
+plot(m.w.snow.shch)
+plot(m.w.snow.shch1)
+
+qqPlot(resid(m.w.snow.shch))
+qqPlot(resid(m.w.snow.shch1))
+
+######################## bootstrap ################
+new.w.snow.shch <- expand.grid(treatment = c("C", "S"))
+
+bootfit.w.snow.shch1 <- bootMer(m.w.snow.shch1, 
+                                FUN=function(x)predict(x, new.w.snow.shch, re.form=~0), nsim=999)
+
+new.w.snow.shch$lci1 <- apply(bootfit.w.snow.shch1$t, 2, quantile, 0.025) 
+new.w.snow.shch$uci1 <- apply(bootfit.w.snow.shch1$t, 2, quantile, 0.975) 
+new.w.snow.shch$shchpred1 <- predict(m.w.snow.shch1, newdata=new.w.snow.shch, re.form=~0)
+
+### plot the original results
+ggplot(new.w.snow.shch, aes(x = treatment, y = shchpred1, ymin = lci1, ymax = uci1)) +
+  geom_pointrange(position=pd) + 
+  geom_point(alpha = 0.3, position=pd) + theme_bw() +
+  ylab("Change in diversity")
+
+###>>>>>>>>>>> Weighted with initial shan
+bootfit.w.snow.shch <- bootMer(m.w.snow.shch, 
+                               FUN=function(x)predict(x, new.w.snow.shch, re.form=~0), nsim=999)
+
+new.w.snow.shch$lci <- apply(bootfit.w.snow.shch$t, 2, quantile, 0.025) 
+new.w.snow.shch$uci <- apply(bootfit.w.snow.shch$t, 2, quantile, 0.975) 
+new.w.snow.shch$shchpred <- predict(m.w.snow.shch, newdata=new.w.snow.shch, re.form=~0)
+
+### plot the original results
+ggplot(new.w.snow.shch, aes(x = treatment, y = shchpred, ymin = lci, ymax = uci)) +
+  geom_pointrange(position=pd) + 
+  geom_point(alpha = 0.3, position=pd) + theme_bw() +
+  ylab("Change in diversity")
+
+
+###-------- Comparisons --------------###
+library(multcomp)
+library(mvtnorm)
+library(survival)
+library(TH.data)
+
+summary(glht(m.w.snow.shch1, mcp(rank="Tukey")))
+
+#### multiple comparisons
+aov.out2 = aov(shchpred ~ treatment, data=new.w.snow.shch)
+TukeyHSD(aov.out2)
