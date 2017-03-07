@@ -157,16 +157,12 @@ m.w.snow.spri3 <- lmer(no.spec ~ treatment*census + (1|site),
                        data=gathered.w.snow.spri)
 
 anova(m.w.snow.spri1, m.w.snow.spri2, m.w.snow.spri3)
+anova(m.w.snow.spri2, m.w.snow.spri3)
 
 m.w.snow.spri <- m.w.snow.spri3
 
-summary(m.w.snow.spri3)
-plot(m.w.snow.spri3)
-
-
-summary(m.w.snow.spri2)
-plot(m.w.snow.spri2)
-
+summary(m.w.snow.spri)
+plot(m.w.snow.spri)
 
 ### bootstrap
 
@@ -266,8 +262,7 @@ gathered.w.snow$abun <- as.numeric(gathered.w.snow$height !=0 & !is.na(gathered.
 w.snow.abun  <- aggregate(abun ~ treatment +  site + quadrat + census, 
                         data=gathered.w.snow, FUN=sum)
 
-dev.new()
-par(mfrow = c(2,2))
+
 hist(w.snow.abun$abun)
 hist(log(w.snow.abun$abun))
 hist(log10(w.snow.abun$abun))
@@ -282,7 +277,6 @@ plot(m.w.snow.abun)
 m.w.snow.abun1 <- lmer(abun ~ treatment + census + (1|site), data=w.snow.abun)
 summary(m.w.snow.abun1)
 plot(m.w.snow.abun1)
-
 
 
 ############# bootstrap ##################
@@ -306,76 +300,11 @@ ggplot(new.snow.abun, aes(x = census, y = abunpred, ymin = lci, ymax = uci,
 
 
 
-
-
-
 ############################################################################
 ######################## community analysis ################################
 ############################################################################
 ### Abundance for each species in each quadrat in each census
 gathered.w.pest$abun <- as.numeric(gathered.w.pest$height !=0 & !is.na(gathered.w.pest$height))
-gathered.w.pest.spec.abun  <- aggregate(abun ~ pesticide + exclosure + quad1 + census + species, 
-                                        data=gathered.w.pest, FUN=sum)
-# View(gathered.pest.spec.abun)
-
-unique(gathered.w.pest.spec.abun$species)
-
-### Make the data available for community analysis
-gathered.w.pest.spec.abun1 <- unite(gathered.w.pest.spec.abun, "new", pesticide:census, sep = "_")
-
-# CommData1 <- as.data.frame.matrix(with(gathered.pest.spec.abun1,table(new1,species)))
-# View(CommData1)
-
-gathered.w.pest.spec.abun2 <- spread(gathered.w.pest.spec.abun1, species, abun)
-#View(gathered.w.pest.spec.abun2)
-gathered.w.pest.spec.abun2[is.na(gathered.w.pest.spec.abun2)] <- 0
-gathered.w.pest.spec.abun3 <- separate(gathered.w.pest.spec.abun2,new,into=c("pesticide","exclosure","quad1","census"),"_")
-gathered.w.pest.spec.abun4 <- separate(gathered.w.pest.spec.abun3,quad1,into=c("site","quadrat"),":")
-gathered.w.pest.spec.abun5 <- unite(gathered.w.pest.spec.abun4, "quad1", site:quadrat, sep = "")
-
-
-# gathered.w.pest.spec.abun6 <- gathered.w.pest.spec.abun5
-# CommPest1 <- subset(CommPest,,-c("pesticide", "exclosure", "census"))
-# CommPest1 <- CommPest[,-c("pesticide", "exclosure", "census")]
-Comm.w.pest <- gathered.w.pest.spec.abun5[,-c(1, 2, 3, 4)]
-
-
-###
-library(vegan)
-library(permute)
-library(lattice)
-
-
-## Shannon's index
-w.pest.shan <- diversity(Comm.w.pest)
-
-hist(w.pest.shan)
-
-Comm.w.pest.dat <- data.frame(gathered.w.pest.spec.abun5$pesticide, 
-                              gathered.w.pest.spec.abun5$exclosure, 
-                              gathered.w.pest.spec.abun5$quad1, 
-                              gathered.w.pest.spec.abun5$census,
-                              w.pest.shan)
-### rename columns
-colnames(Comm.w.pest.dat) <- c("pesticide","exclosure","quad","census","shan")
-### fit in the model
-m.w.pest.shan1 <- lmer(shan ~ pesticide*exclosure + census + (1|quad), data=Comm.w.pest.dat)
-m.w.pest.shan2 <- lmer(shan ~ pesticide + exclosure + census + (1|quad), data=Comm.w.pest.dat)
-
-anova(m.w.pest.shan1,m.w.pest.shan2)
-
-Comm.w.pest.dat$pesticide <- relevel(Comm.w.pest.dat$pesticide, ref="W")
-m.w.pest.shan <- lmer(shan ~ pesticide + exclosure + census + (1|quad), data=Comm.w.pest.dat)
-
-summary(m.w.pest.shan)
-
-plot(m.w.pest.shan)
-# this model is wrong, for the random effect should be site, rather than quad
-
-
-#######################
-### Site and quadrat
-### It's site not code
 gathered.w.pest.spec.abun  <- aggregate(abun ~ pesticide + exclosure + site + quadrat + census + species, 
                                         data=gathered.w.pest, FUN=sum)
 # View(gathered.pest.spec.abun)
@@ -542,7 +471,7 @@ plot(m.w.pest.simp.new3)
 qqnorm(resid(m.w.pest.simp.new3))
 
 
-
+### Residuals test
 test.w.shan.pest1 <- data.frame(res = resid(m.w.pest.shan.new1), fit = fitted(m.w.pest.shan.new1), 
                               pest = Comm.w.pest.shan.dat.new$pesticide, excl = Comm.w.pest.shan.dat.new$exclosure,
                               cens = Comm.w.pest.shan.dat.new$census, quad = Comm.w.pest.shan.dat.new$quad)
@@ -567,7 +496,7 @@ qplot(x=fit, y=res, geom='smooth', data=test.w.shan.pest1, colour=pest, facets=~
 
 
 ###################### shannon's index ######################
-View(new.w.pest)
+#View(new.w.pest)
 new.w.pest.shan <- expand.grid(pesticide = c("C", "F","I","W"), exclosure = c("0","1"),
                              census= c("16sp","16fa"))
 
@@ -698,7 +627,7 @@ summary(gathered.w.snow.dive.dat)
 gathered.w.snow.dive.dat1 <- unite(gathered.w.snow.dive.dat, "new", treatment:census, sep = "_")
 gathered.w.snow.dive.dat2 <- spread(gathered.w.snow.dive.dat1, species, abun)
 gathered.w.snow.dive.dat2[is.na(gathered.w.snow.dive.dat2)] <- 0
-View(gathered.w.snow.dive.dat2)
+#View(gathered.w.snow.dive.dat2)
 
 Comm.w.snow.dat <- gathered.w.snow.dive.dat2[,-c(1)]
 ### Shannon index
@@ -842,7 +771,7 @@ w.pest.shan.15fa$shan.16fa <- w.pest.shan.16fa[match(w.pest.shan.15fa$new_col, w
 for (i in 1:dim(w.pest.shan.15fa)[1]) {
   w.pest.shan.15fa$shch[i] <- w.pest.shan.15fa$shan.16fa[i]- w.pest.shan.15fa$shan[i]
 }
-View(w.pest.shan.15fa)
+#View(w.pest.shan.15fa)
 
 ## fit the model
 hist(w.pest.shan.15fa$shch)
@@ -900,7 +829,7 @@ w.snow.shan.14fa$shan.16fa <- w.snow.shan.16fa[match(w.snow.shan.14fa$new_col, w
 for (i in 1:dim(w.snow.shan.14fa)[1]) {
   w.snow.shan.14fa$shch[i] <- w.snow.shan.14fa$shan.16fa[i]- w.snow.shan.14fa$shan[i]
 }
-View(w.snow.shan.14fa)
+#View(w.snow.shan.14fa)
 
 ## fit the model
 hist(w.snow.shan.14fa$shch)
@@ -933,6 +862,7 @@ ggplot(new.w.snow.shch, aes(x = treatment, y = shchpred1, ymin = lci1, ymax = uc
   geom_point(alpha = 0.3, position=pd) + theme_bw() +
   ylab("Change in diversity")
 
+
 ###>>>>>>>>>>> Weighted with initial shan
 bootfit.w.snow.shch <- bootMer(m.w.snow.shch, 
                                FUN=function(x)predict(x, new.w.snow.shch, re.form=~0), nsim=999)
@@ -947,15 +877,3 @@ ggplot(new.w.snow.shch, aes(x = treatment, y = shchpred, ymin = lci, ymax = uci)
   geom_point(alpha = 0.3, position=pd) + theme_bw() +
   ylab("Change in diversity")
 
-
-###-------- Comparisons --------------###
-library(multcomp)
-library(mvtnorm)
-library(survival)
-library(TH.data)
-
-summary(glht(m.w.snow.shch1, mcp(rank="Tukey")))
-
-#### multiple comparisons
-aov.out2 = aov(shchpred ~ treatment, data=new.w.snow.shch)
-TukeyHSD(aov.out2)
