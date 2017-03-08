@@ -1,0 +1,274 @@
+---
+title: "Analysis of Shihong's pest exclusion experiment"
+author: "Robert Bagchi"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: html_document
+---
+### 1. Preliminaries
+
+```{r global_options, include=FALSE}
+options(width=80, digits=3)
+library(printr)
+```
+
+``` {r loadlibs, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(cowplot)
+library(lme4)
+library(pbkrtest)
+library(tidyr)
+library(dplyr)
+library(optimx)
+library(broom)
+```
+
+### 2. Organise data
+```{r dataorganisation}
+rm(list=ls())
+
+## Read in data
+pestdat <- read.csv("../data/Pestwoodyseedlings_20170116.csv")
+## reorder the factors in a sensible order
+pestdat$pesticide <- factor(pestdat$pesticide, levels=c('C', 'W', 'F', 'I'))
+pestdat$exclosure <- factor(pestdat$exclosure)
+pestdat$growth.form <- factor(pestdat$growth.form, levels=c('tree', 'shrub'))
+pestdat$propagation <- factor(pestdat$propagation, levels=c('sexual', 'asexual'))
+
+## there is occasionally trailing white space on some of the species names. 
+## Removing this to prevent problems later.
+pestdat$species <- factor(trimws(as.character(pestdat$species)))
+
+## functions to add up number of seedlings in and number of deaths
+totcalc <-  function(x) sum(!is.na(x) & x> 0)
+deathcalc <- function(x) sum(!is.na(x) & x==0)
+
+
+pestdat.ag <- summarise(group_by(pestdat, site, code, quadrat, species,
+                                  pesticide, exclosure, growth.form, propagation), 
+          total_16s=totcalc(height_15f),  total_16f=totcalc(height_16s), 
+          deaths_16s=deathcalc(height_16s), deaths_16f=deathcalc(height_16f))
+
+pestdat.ag <-  gather(pestdat.ag, "meas", "N", total_16s:deaths_16f) %>% 
+  separate(meas, into=c("meas", "census"), sep="_") %>%
+  spread(meas, N)
+## calculate no. survivors as total - deaths
+pestdat.ag$survs <- pestdat.ag$total - pestdat.ag$deaths
+
+pestdat.ag <- subset(pestdat.ag, total > 0)
+
+## get idea of representation of treatments
+group_by(pestdat.ag, growth.form, propagation) %>% tally
+
+pestdat.ag$quad.unique <- as.factor(paste(pestdat.ag$site,
+                                          pestdat.ag$exclosure,
+                                          pestdat.ag$quadrat, sep='_'))
+pestdat.ag$plot <- as.factor(paste(pestdat.ag$site, pestdat.ag$exclosure, 
+                                   sep='_'))
+
+```
+
+### 3. Initial plots
+Now some initial plots
+
+```{r initialplots}
+ggplot(data=pestdat.ag,
+       aes(x=pesticide, y=survs/total, colour=as.factor(exclosure))) + geom_violin()
+
+ggplot(data=pestdat.ag, 
+       aes(x=pesticide, y=survs/total, colour=as.factor(exclosure))) + 
+  geom_boxplot() +
+  facet_wrap(~growth.form + propagation)
+summary(pestdat.ag)
+
+
+group_by(pestdat.ag, pesticide, exclosure, propagation, growth.form) %>% 
+  summarise(surv = mean(survs/total), 
+            se.survs=sd(survs/total)/sqrt(length(survs/total))) %>% 
+ggplot(aes(x=pesticide, y=surv, ymin=surv-se.survs, ymax=surv+se.survs, 
+           colour=as.factor(exclosure))) + geom_errorbar() + geom_point() +
+    facet_wrap(~growth.form + propagation) 
+
+
+```
+
+Overall, difficult to see what might be going on here - no dramatic trends.
+
+## 4. Initial models
+
+First let us model survival as a function of treatments (pesticide and exclosure) and looking at growth forms separately. We had some issues with convergence using the default optimisers, so switched to those in the optimx package that worked better. Differences between fits were small, despite the convergence warnings. The plot level random effects had close to 0 variance and were therefore dropped from further analyses.
+
+```{r treesurvivalmodel}
+pestdat.ag$site <- factor(pestdat.ag$site)
+contrasts(pestdat.ag$site) <- "contr.sum"
+
+summary(pestdat.ag)
+mod.tree <- glmer(cbind(survs, deaths) ~ site + pesticide*exclosure + 
+                (1|quad.unique) + (1|species),
+              data=subset(pestdat.ag, growth.form=='tree'), family=binomial, 
+              control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.tree.diags <- augment(mod.tree)
+qplot(data=mod.tree.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.tree.diags, x= pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+names(mod.tree.diags)
+library(gridExtra)
+library(lattice)
+qqmath(ranef(mod.tree,  condVar=TRUE, whichel="species"))
+qqmath(ranef(mod.tree,  condVar=TRUE, whichel="quad.unique"))
+summary(mod.tree)
+
+mod.tree.dd <- glmer(cbind(survs, deaths) ~ site + total*pesticide*exclosure + 
+                       (1|quad.unique) + (1|species),
+                     data=subset(pestdat.ag, growth.form=='tree'), family=binomial, 
+                     control=glmerControl(optimizer="optimx",
+                                          optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+summary(mod.tree.dd)
+```
+
+
+
+Now we can model the shrub data. Including the Nelder-Mead optimizer led to warnings - however, just using bobyqa solved them. Additionally, I removed the 3 way interaction between propagation, pesticide and exclosure. 
+```{r shrubmodels}
+mod.shrub <- glmer(cbind(survs, deaths) ~ site + (propagation+pesticide+exclosure)^2 + 
+                (1|quad.unique) + (1|species),
+              data=subset(pestdat.ag, growth.form=='shrub'), family=binomial,
+              control=glmerControl(optimizer="optimx", optCtrl=list(method='bobyqa')))
+```
+
+### 5. Density dependence
+Ultimately we are interested in not only whether or not pesticides improve survival, but also whether survival is density dependent and if pesticides remove that density dependence. The next analysis examines the evidence for density dependence.
+
+First let us look at some plots of survival against density.
+
+```{r ndd1}
+## For all tree species together
+ggplot(data=subset(pestdat.ag, growth.form=='tree'), 
+       aes(x=total, y=survs/total, colour=pesticide)) + 
+  geom_jitter()+
+  geom_smooth(aes(weight = total), method='glm', method.args=list(family="binomial")) +
+  facet_wrap(~exclosure)
+
+## And now pulling the species apart. 
+## First need to filter down to species that can be analysed - need enough
+## reps (lets say 5) and variation in abundance (at least 2x 
+sp.counts <- summarise(group_by(pestdat.ag, species), 
+          n.quadrat=length(total), max.dens=max(total), min.dens=min(total))
+
+sp.counts$range <- sp.counts$max.dens - sp.counts$min.dens
+sp.sel <- sp.counts$species[sp.counts$n.quadrat > 10 & sp.counts$range >=3]
+sp.counts[sp.counts$species %in% sp.sel,]
+
+ggplot(data=subset(pestdat.ag, species %in% sp.sel), 
+       aes(x=total, y=survs/total, colour=pesticide)) + 
+  geom_jitter()+
+  geom_smooth(aes(weight = total), method='glm',
+              method.args=list(family="binomial"), fullrange=T) +
+  facet_wrap(~ species,  scales='free')
+
+## try using log density
+ggplot(data=subset(pestdat.ag, species %in% sp.sel), 
+       aes(x=total, y=survs/total, colour=pesticide)) + 
+  geom_jitter()+
+  geom_smooth(aes(weight = total), method='glm', formula=y~log(x),
+              method.args=list(family="binomial"), fullrange=T) +
+  facet_wrap(~ species,  scales='free')
+```
+
+Pretty hard to make too much out from these plots. It does appear that only about 4 species(*Acer barbinerve, A. tegmentosum, Fraxinus mandschurica, and Tilia amurensis*) have enough data to say much at all. *Pinus koraiensis* looked a possibility, but models don't seem to fit very well. The confidence intervals on the others are huge and go from 0 to 1. Looking at htose species it looks like if anything, survival increases with density. 
+
+We can try fitting models to the subset here (but expect that only those 5 species will be usable. Note that if we split by exclosure the figures get messier, but that isn't necessarily a problem because models will pool the power to some extent.
+
+```{r nddmods}
+## quick plot of only the species for which there appear to be enough data
+sp.sel2 <- c('Acer barbinerve', 'Acer tegmentosum', 
+             'Fraxinus mandschurica', 'Tilia amurensis')
+
+ggplot(data=subset(pestdat.ag, species %in% sp.sel2), 
+       aes(x=total, y=survs/total, colour=pesticide)) + 
+  geom_jitter()+
+  geom_smooth(aes(weight = total), method='glm',
+              method.args=list(family="binomial"), fullrange=T) +
+  facet_wrap(~ species + exclosure,  scales='free')
+
+nddmods <- sapply(sp.sel2, function(sp){
+  print(sp)
+    spdat <- filter(pestdat.ag, species == sp)
+  ## to increase ability to fit models, standardise total
+  spdat$dens <- (spdat$total - mean(spdat$total))/(2*sd(spdat$total))
+  spdat <- droplevels(spdat)
+  mod <- glmer(cbind(survs, deaths) ~ site + dens*(pesticide+exclosure) + (1|quad.unique), 
+               data=spdat, family=binomial, 
+               control=glmerControl(optimizer="optimx",
+                                    optCtrl=list(method=c('bobyqa', 'Nelder-Mead')))
+  )
+}, simplify=FALSE)
+
+## diagnostic plots
+indmods.resids <- lapply(nddmods, augment) 
+
+indmods.resids <- do.call('rbind', mapply(function(spnm, dat) {
+  dat$species <- spnm
+  return(dat)
+  }, spnm=as.list(names(indmods.resids)), dat=indmods.resids, 
+  SIMPLIFY=FALSE))
+
+ggplot(data=indmods.resids, aes(x=.fitted, y=.wtres, colour=pesticide)) +
+  geom_jitter() + geom_smooth() + facet_wrap(~species, scales='free') +
+  geom_hline(yintercept=0, linetype='dashed')
+
+lapply(nddmods, function(mod){
+  dotplot(ranef(mod, condVar=TRUE))})
+
+## These still need some work., especially the T. amurensis model.
+## which has a definite trend. Also, if you look at the A. tementosum model the random effects
+## have 0 variance - so need to spend sometime on it.
+lapply(nddmods, function(x) summary(x, correlation=FALSE))
+lapply(nddmods, function(x) anova(x))
+```
+
+What the individual models suggest overall is that 
+1. The effect of density is not negative - if anything, it is slightly positive - a finding that agrees with the result from the pooled data.
+2. FUngicide and insecticide do not appear to change the slope of the relationship between density and survival in the expected direction. The one example where the interaction between density and pesticide appears significant and in the right direction is '*Fraxinus mandschurica*. However, it is debatable how much that should be interpreted.
+
+
+### 6. Analysis of diversity
+First need to calculate the diversity in each quadrat.
+
+```{r diversitycalc}
+library(vegan)
+sp.diversity <- summarise(
+  group_by(pestdat.ag, plot, quadrat, quad.unique, pesticide, exclosure, census), 
+  shannon=diversity(total), simpson=diversity(total, index='invsimpson'))
+sp.diversity
+
+ggplot(sp.diversity, aes(x=pesticide, y=shannon, colour = exclosure)) +
+  geom_boxplot()
+summarise(group_by(sp.diversity, pesticide, exclosure, census), meanH=mean(shannon), 
+          seH=sd(shannon)/sqrt(length(shannon))) %>%
+  ggplot(aes(x=pesticide, y=meanH, ymin=meanH-seH, ymax=meanH+seH, colour=census, 
+             shape=exclosure)) + geom_pointrange() + coord_trans(y="exp") +
+  labs(x="pesticide", y="Effective number of species")
+
+sp.diversity$census <- factor(sp.diversity$census, levels=c('16s', '16f'))
+mod.div <- lmer(shannon ~ census + pesticide*exclosure + (1|plot/quad.unique), data=sp.diversity)
+plot(mod.div, type=c('p', 'smooth'))
+## looks a little dodgy to me.
+dotplot(ranef(mod.div, condVar=TRUE))
+library(sjPlot)
+sjp.lmer(mod.div, type='fe')
+sjp.lmer(mod.div, type='re', sort.est="sort.all" )
+
+dotplot(ranef(mod.div, condVar=TRUE, whichel="quad.unique:plot"))
+dotplot(ranef(mod.div, condVar=TRUE, whichel="plot")) ## bit dodgy
+summary(mod.div, correlation=FALSE)
+```
+
+Overall, it doesn't look like too much is happening here in terms of effects of treatment on diversity. Diversity increases over time, probably because we are seeing the establishment of the community from bare ground. There does seem to be a cosistent decrease in diversity in the exclosure treatment, but unfortunately, the lack of replication makes it hard to confirm.
+
+
+
+
+
