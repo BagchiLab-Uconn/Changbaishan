@@ -1,0 +1,282 @@
+---
+title: "InitialAnalysisHerb"
+author: "Shihong Jia"
+date: "Mar 23, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load packages
+``` {r loadlibs, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(cowplot)
+# library(lme4)
+suppressWarnings(suppressMessages(library("lme4")))
+library(pbkrtest)
+library(tidyr)
+library(dplyr)
+library(optimx)
+library(broom)
+library(vegan)
+```
+
+### Data
+```{r dataorganisation}
+herbdat <- read.csv("data/Herb_20170303.csv")
+
+summary(herbdat)
+unique(herbdat$species)
+hist(table(herbdat$species))
+
+## manipulate data
+herbdat$site <- factor(herbdat$site)
+herbdat$quadrat <- factor(herbdat$quadrat)
+herbdat$census <- factor(herbdat$census)
+herbdat$exclosure <- factor(herbdat$exclosure)
+
+## Removing this to prevent problems later.
+herbdat$species <- factor(trimws(as.character(herbdat$species)))
+
+herbdat$quad.unique <- as.factor(paste(herbdat$site,
+                                          herbdat$exclosure,
+                                          herbdat$quadrat, sep='_'))
+herbdat$plot <- as.factor(paste(herbdat$site, herbdat$exclosure, 
+                                   sep='_'))
+## calculate diversity
+sp.diversity_herb <- summarise(
+  group_by(herbdat, plot, quadrat, quad.unique, treatment, exclosure, census), 
+  shannon=diversity(no.ind.), simpson=diversity(no.ind., index='invsimpson'))
+sp.diversity_herb
+sp.diversity_herb$census <- factor(sp.diversity_herb$census,
+                                   levels=c('15fa','16sp','16su','16fa'))
+
+
+## data set of pesticide and snow removal treatment seperately
+## pesticide
+herbpest <- subset(herbdat, treatment !='S')
+herbpest$treatment <- factor(herbpest$treatment, levels=c('W', 'F', 'I', 'C'))
+
+sp.diversity_herbpest <- subset(sp.diversity_herb, treatment !='S')
+sp.diversity_herbpest$treatment <- factor(sp.diversity_herbpest$treatment, levels=c('W', 'F', 'I', 'C'))
+summary(sp.diversity_herbpest)
+## snow
+herbsnow <- subset(herbdat, treatment =='C' | treatment =='S')
+sp.diversity_herbsnow <- subset(sp.diversity_herb, treatment =='C' | treatment =='S')
+
+```
+
+### 1. Analysis of diversity for pesticide
+
+```{r diversitycalc.herbpest}
+
+ggplot(sp.diversity_herbpest, aes(x=treatment, y=shannon, colour = exclosure)) +
+  geom_boxplot()
+summarise(group_by(sp.diversity_herbpest, treatment, exclosure, census), meanH=mean(shannon), 
+          seH=sd(shannon)/sqrt(length(shannon))) %>%
+  ggplot(aes(x=treatment, y=meanH, ymin=meanH-seH, ymax=meanH+seH, colour=census, 
+             shape=exclosure)) + geom_pointrange() + coord_trans(y="exp") +
+  labs(x="pesticide", y="Effective number of species")
+
+mod.pest.herb.div1 <- lmer(shannon ~ census*treatment*exclosure + (1|plot/quad.unique), data=sp.diversity_herbpest)
+mod.pest.herb.div2 <- lmer(shannon ~ census*(treatment + exclosure) + (1|plot/quad.unique), data=sp.diversity_herbpest)
+mod.pest.herb.div3 <- lmer(shannon ~ census + treatment*exclosure + (1|plot/quad.unique), data=sp.diversity_herbpest)
+mod.pest.herb.div4 <- lmer(shannon ~ census*treatment + exclosure + (1|plot/quad.unique), data=sp.diversity_herbpest)
+mod.pest.herb.div5 <- lmer(shannon ~ census + treatment + exclosure + (1|plot/quad.unique), data=sp.diversity_herbpest)
+anova(mod.pest.herb.div1, mod.pest.herb.div2, mod.pest.herb.div3,
+      mod.pest.herb.div4, mod.pest.herb.div5)
+
+
+plot(mod.pest.herb.div2, type=c('p', 'smooth'))
+dotplot(ranef(mod.pest.herb.div2, condVar=TRUE))
+
+library(sjPlot)
+sjp.lmer(mod.pest.herb.div2, type='fe')
+sjp.lmer(mod.pest.herb.div2, type='re', sort.est="sort.all" )
+
+summary(mod.pest.herb.div2, correlation=FALSE)
+```
+
+### 2. Analysis of diversity for snow removal treatment
+
+```{r diversitycalc.herbsnow}
+
+ggplot(sp.diversity_herbsnow, aes(x=treatment, y=shannon, colour = exclosure)) +
+  geom_boxplot()
+summarise(group_by(sp.diversity_herbsnow, treatment, exclosure, census), meanH=mean(shannon), 
+          seH=sd(shannon)/sqrt(length(shannon))) %>%
+  ggplot(aes(x=treatment, y=meanH, ymin=meanH-seH, ymax=meanH+seH, colour=census, 
+             shape=exclosure)) + geom_pointrange() + coord_trans(y="exp") +
+  labs(x="pesticide", y="Effective number of species")
+
+mod.snow.herb.div1 <- lmer(shannon ~ census*treatment*exclosure + (1|plot/quad.unique), data=sp.diversity_herbsnow)
+mod.snow.herb.div2 <- lmer(shannon ~ census*(treatment + exclosure) + (1|plot/quad.unique), data=sp.diversity_herbsnow)
+mod.snow.herb.div3 <- lmer(shannon ~ census + treatment*exclosure + (1|plot/quad.unique), data=sp.diversity_herbsnow)
+mod.snow.herb.div4 <- lmer(shannon ~ census*treatment + exclosure + (1|plot/quad.unique), data=sp.diversity_herbsnow)
+mod.snow.herb.div5 <- lmer(shannon ~ census + treatment + exclosure + (1|plot/quad.unique), data=sp.diversity_herbsnow)
+anova(mod.snow.herb.div1, mod.snow.herb.div2, mod.snow.herb.div3,
+      mod.snow.herb.div4, mod.snow.herb.div5)
+
+
+plot(mod.snow.herb.div2, type=c('p', 'smooth'))
+dotplot(ranef(mod.snow.herb.div2, condVar=TRUE))
+
+sjp.lmer(mod.snow.herb.div2, type='fe')
+sjp.lmer(mod.snow.herb.div2, type='re', sort.est="sort.all" )
+
+summary(mod.snow.herb.div2, correlation=FALSE)
+
+```
+
+### 3. Abundance analysis
+First need to calculate abundance. In this analysis, we examine for overall, pesticide and snow removal treatment seperately, and then move to individual species.
+```{r abundancecalc.herb}
+## Overall
+## data set
+herb.abundat <- aggregate(no.ind. ~ treatment + exclosure + site + quadrat + plot + quad.unique + census, data=herbdat, FUN=sum)
+herb.abundat$no.ind. <- as.numeric(herb.abundat$no.ind.)
+
+mod.herb.abun1 <- glmer(no.ind. ~ site + treatment*exclosure + census +(1|quad.unique),
+                       data=herb.abundat, family=poisson, 
+                       control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+mod.herb.abun2 <- glmer(no.ind. ~ site + treatment*exclosure + census +(1|plot/quad.unique),
+                        data=herb.abundat, family=poisson,
+                        control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+mod.herb.abun3 <- glmer(no.ind. ~ site + census*(treatment + exclosure) +(1|plot/quad.unique),
+                        data=herb.abundat, family=poisson, 
+                        control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+mod.herb.abun4 <- glmer(no.ind. ~ site + census + treatment*exclosure +(1|plot/quad.unique),
+                        data=herb.abundat, family=poisson,
+                        control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+mod.herb.abun5 <- glmer(no.ind. ~ site + census + treatment + exclosure +(1|plot/quad.unique),
+                        data=herb.abundat, family=poisson,
+                        control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.herb.abun1, mod.herb.abun2, mod.herb.abun3,
+      mod.herb.abun4, mod.herb.abun5)
+
+mod.herb.abun <- mod.herb.abun3
+mod.herb.abun.diags <- augment(mod.herb.abun)
+qplot(data=mod.herb.abun.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.herb.abun.diags, x= treatment, y=.wtres, geom="boxplot", colour=census) 
+
+sjp.lmer(mod.herb.abun, type='fe')
+sjp.lmer(mod.herb.abun, type='re', sort.est="sort.all" )
+summary(mod.herb.abun, correlation=FALSE)
+
+
+## pesticide
+herbpest.abundat <- subset(herb.abundat, treatment !='S')
+herbpest.abundat$treatment <- factor(herbpest.abundat$treatment, levels=c('W', 'F', 'I', 'C'))
+
+mod.herbpest.abun <- glmer(no.ind. ~ site + census*(treatment+exclosure)+(1|plot/quad.unique),
+                           data=herbpest.abundat, family=poisson,
+                           control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.herbpest.abun.diags <- augment(mod.herbpest.abun)
+qplot(data=mod.herbpest.abun.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+
+sjp.lmer(mod.herbpest.abun, type='fe')
+sjp.lmer(mod.herbpest.abun, type='re', sort.est="sort.all" )
+summary(mod.herbpest.abun, correlation=FALSE)
+
+## snow
+herbsnow.abundat <- subset(herb.abundat, treatment =='C' | treatment =='S')
+mod.herbsnow.abun <- glmer(no.ind. ~ site + census*treatment + exclosure+(1|plot/quad.unique),
+                           data=herbsnow.abundat, family=poisson,
+                           control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.herbsnow.abun.diags <- augment(mod.herbsnow.abun)
+qplot(data=mod.herbsnow.abun.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+
+sjp.lmer(mod.herbsnow.abun, type='fe')
+sjp.lmer(mod.herbsnow.abun, type='re', sort.est="sort.all" )
+
+
+### individual species test
+## without site as variables
+## sample size data frame
+sampsize.herbind <- as.data.frame(table(herbdat$species, herbdat$treatment, herbdat$exclosure))
+colnames(sampsize.herbind) <- c('species', 'treatment', 'exclosure', 'no.quad')
+
+sampsize.herbind <- sampsize.herbind %>% 
+  spread(treatment, no.quad) 
+
+## sample size for pesticide and snow data
+sampsize.herbind.pest <- sampsize.herbind[, !(colnames(sampsize.herbind) %in% c("S"))]
+sampsize.herbind.snow <- sampsize.herbind[, !(colnames(sampsize.herbind) %in% c("F",'I','W'))]
+
+sel.sp.herbpest <- unique(sampsize.herbind.pest$species[sampsize.herbind.pest$W >= 3 & 
+                        (sampsize.herbind.pest$F >= 3 | sampsize.herbind.pest$I >= 3)])
+sel.sp.herbsnow <- unique(sampsize.herbind.snow$species[sampsize.herbind.snow$C >= 3 & 
+                                                   sampsize.herbind.snow$S >= 3])
+
+####################
+## model with census
+
+sampsize.herbind <- as.data.frame(table(herbdat$species, herbdat$treatment, herbdat$exclosure, herbdat$census))
+colnames(sampsize.herbind) <- c('species', 'treatment', 'exclosure', 'census', 'no.quad')
+
+sampsize.herbind <- sampsize.herbind %>% 
+  spread(treatment, no.quad) 
+
+## sample size for pesticide and snow data
+sampsize.herbind.pest <- sampsize.herbind[, !(colnames(sampsize.herbind) %in% c("S"))]
+sampsize.herbind.snow <- sampsize.herbind[, !(colnames(sampsize.herbind) %in% c("F",'I','W'))]
+
+sel.sp.herbpest <- unique(sampsize.herbind.pest$species[sampsize.herbind.pest$W >= 3 & 
+                        (sampsize.herbind.pest$F >= 3 | sampsize.herbind.pest$I >= 3)])
+sel.sp.herbsnow <- unique(sampsize.herbind.snow$species[sampsize.herbind.snow$C >= 3 & 
+                                                   sampsize.herbind.snow$S >= 3])
+
+indivmods.herbpest <- sapply(sel.sp.herbpest, function(sp){
+  print(sp)
+  spdat <- filter(herbpest, species == sp)
+  spdat <- droplevels(spdat)
+  # random effects: remove quad.unique
+  if (length(unique(spdat$exclosure)) == 2 & length(unique(spdat$census)) >= 2){
+    mod <- glmer(no.ind. ~ census + treatment + exclosure + (1|plot/quad.unique),
+                 data=spdat,family=poisson,
+                 control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+  } else if (length(unique(spdat$exclosure)) < 2 & length(unique(spdat$census)) >=2) {
+    mod <- glmer(no.ind. ~ census + treatment + (1|plot/quad.unique),
+                 data=spdat,family=poisson,
+                 control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+  } else if (length(unique(spdat$exclosure)) == 2 & length(unique(spdat$census)) < 2) {
+    mod <- glmer(no.ind. ~ treatment + exclosure + (1|plot/quad.unique),
+                 data=spdat, family=poisson,
+                 control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+  } else {
+    mod <- glmer(no.ind. ~ treatment + (1|plot/quad.unique),
+                 data=spdat, family=poisson,
+                 control=glmerControl(optimizer="optimx", 
+                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+  }
+  
+}, simplify=FALSE)
+
+### plot residuals
+lapply(indivmods.herbpest, function(mod){
+  plot(mod, type=c('p', 'smooth'))})
+lapply(indivmods.herbpest, function(mod){
+  dotplot(ranef(mod, condVar=TRUE))})
+
+lapply(indivmods.herbpest, function(x) summary(x, correlation=FALSE))
+
+```
+Overall, pesticide treatments didn't affect diversity but abundance. However, when density was tested in individual species, pesticide caused some effects. Snow removal treatment changed both abundance and diversity. I haven't done the analyses of snow removal on the density of individual species. As to the analysis of pestcide treatment on density of individual species, results were complicated but interesting. 
