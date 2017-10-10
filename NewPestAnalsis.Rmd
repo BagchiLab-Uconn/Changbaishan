@@ -1,0 +1,860 @@
+---
+title: "Analysis of the CBS pesticide experiment"
+author: "Shihong Jia"
+date: "Oct. 5, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load packages
+``` {r loadlibs, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(cowplot)
+library(lme4)
+library(pbkrtest)
+library(tidyr)
+library(dplyr)
+library(optimx)
+library(broom)
+```
+
+### Data description
+Five censuses (15fa, 16sp, 16fa, 17sp and 17fa) were conducted. Information of neigboring trees (area of conspecific, heterospecific and overall species) 20 radius around the focal quadrats are added to the dataset. 
+
+### Survival analysis
+
+```{r survivalanalysis}
+getwd()
+rm(list=ls())
+
+## Read in data
+
+pestdat.ag_adult <- read.csv("data/pestdat.ag_adult.csv")
+pestdat.ag_adult <- pestdat.ag_adult[,-c(1)]
+pestdat.ag_adult$pesticide <- factor(pestdat.ag_adult$pesticide, levels=c('W', 'F', 'I', 'C'))
+pestdat.ag_adult$census <- factor(pestdat.ag_adult$census)
+pestdat.ag_adult$exclosure <- factor(pestdat.ag_adult$exclosure)
+pestdat.ag_adult$site <- factor(pestdat.ag_adult$site)
+summary(pestdat.ag_adult)
+
+
+### Intial plots
+ggplot(data=pestdat.ag_adult, 
+       aes(x=pesticide, y=survs/total, colour=as.factor(exclosure))) + 
+  geom_boxplot() +
+  facet_wrap(~growth.form)
+
+group_by(pestdat.ag_adult, pesticide, exclosure, growth.form) %>% 
+  summarise(surv = mean(survs/total), 
+            se.survs=sd(survs/total)/sqrt(length(survs/total))) %>% 
+ggplot(aes(x=pesticide, y=surv, ymin=surv-se.survs, ymax=surv+se.survs, 
+           colour=as.factor(exclosure))) + 
+  labs(x="Pesticide", y="Survival") + 
+  geom_errorbar(position=position_dodge(width = .5), width = 0.2) + 
+  geom_point(position=position_dodge(width = .5)) +
+    facet_wrap(~growth.form)
+
+
+###------------------------- Initial Survival models -------------------------###
+pestdat.ag_adult$site <- factor(pestdat.ag_adult$site)
+contrasts(pestdat.ag_adult$site) <- "contr.sum"
+
+## Conspecific and heterospecific area of adult trees
+mod.tree_adult1 <- glmer(cbind(survs, deaths) ~ site + pesticide + exclosure + census + 
+                           A.con_curt + A.het_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+
+# sum area of adult trees
+mod.tree_adult2 <- glmer(cbind(survs, deaths) ~ site + pesticide + exclosure + census + A.sum_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+## conspecific density of adult trees
+mod.tree_adult3 <- glmer(cbind(survs, deaths) ~ site + pesticide + exclosure + census + con.dens_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.tree_adult1, mod.tree_adult2, mod.tree_adult3)
+
+## interaction terms
+mod.tree_adult4 <- glmer(cbind(survs, deaths) ~ site + pesticide*exclosure*census +
+                           A.con_curt + A.het_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+
+mod.tree_adult5 <- glmer(cbind(survs, deaths) ~ site + pesticide*exclosure + census +
+                           A.con_curt + A.het_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+
+mod.tree_adult6 <- glmer(cbind(survs, deaths) ~ site + (pesticide + exclosure)* census +
+                           A.con_curt + A.het_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.tree_adult4, mod.tree_adult5, mod.tree_adult6)
+
+
+# without neighoring trees
+mod.tree_adult7 <- glmer(cbind(survs, deaths) ~ site + pesticide + exclosure + census + 
+                           (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+
+# nested random effects
+mod.tree_adult8 <- glmer(cbind(survs, deaths) ~ pesticide + exclosure + census + 
+                           A.con_curt + A.het_curt +
+                     (1|plot/quadrat) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.tree_adult1, mod.tree_adult8)
+
+mod.tree_adult9 <- glmer(cbind(survs, deaths) ~ pesticide + exclosure + 
+                           A.con_curt + A.het_curt +
+                     (1|plot/quadrat) + (1|plot/census) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.tree_adult10 <- glmer(cbind(survs, deaths) ~ pesticide + exclosure + census +
+                           A.con_curt + A.het_curt +
+                     (1|plot/pesticide/quadrat) + (1|plot/census) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.tree_adult11 <- glmer(cbind(survs, deaths) ~ pesticide + exclosure + census + 
+                           A.con_curt + A.het_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.tree_adult1, mod.tree_adult8, mod.tree_adult11)
+
+
+mod.tree_adult12 <- glmer(cbind(survs, deaths) ~ site + pesticide*exclosure*census + 
+                           A.con_curt + A.het_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.tree_adult13 <- glmer(cbind(survs, deaths) ~ site + (pesticide+exclosure)*census + 
+                           A.con_curt + A.het_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.tree_adult14 <- glmer(cbind(survs, deaths) ~ site + pesticide*census + exclosure+ 
+                           A.con_curt + A.het_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.tree_adult15 <- glmer(cbind(survs, deaths) ~ pesticide*census + exclosure+ 
+                           A.con_curt + A.het_curt +
+                     (1|plot/quadrat) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.tree_adult1, mod.tree_adult8, mod.tree_adult13, mod.tree_adult14, mod.tree_adult15)
+summary(mod.tree_adult14, correlation=FALSE)
+
+## select the approprate model and test the sensitivity
+mod.tree_adult.diags <- augment(mod.tree_adult1)
+qplot(data=mod.tree_adult.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.tree_adult.diags, x= pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+
+library(car)
+qqPlot(resid(mod.tree_adult1))
+qqPlot(resid(mod.tree_adult14))
+
+library(sjPlot)
+sjp.lmer(mod.tree_adult1, type='fe')
+sjp.lmer(mod.tree_adult1, type='re', sort.est="sort.all" )
+
+summary(mod.tree_adult1, correlation=FALSE)
+
+
+## shrub
+mod.shrub_adult1 <- glmer(cbind(survs, deaths) ~ site + pesticide + exclosure + census + A.sum_curt +
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+## model without sum area of adult neigboring trees
+mod.shrub_adult2 <- glmer(cbind(survs, deaths) ~ pesticide + exclosure + census +                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+mod.shrub_adult3 <- glmer(cbind(survs, deaths) ~ pesticide + exclosure + census +                     (1|plot/quadrat) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.shrub_adult4 <- glmer(cbind(survs, deaths) ~ pesticide + exclosure + census + A.sum_curt +
+                     (1|plot/quadrat) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.shrub_adult5 <- glmer(cbind(survs, deaths) ~ site + pesticide + exclosure + census + 
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.shrub_adult6 <- glmer(cbind(survs, deaths) ~ site + pesticide*census + exclosure + 
+                     (1|quad.unique) + (1|sp.),
+                   data=subset(pestdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                   control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.shrub_adult1, mod.shrub_adult3, mod.shrub_adult4, mod.shrub_adult5, mod.shrub_adult6)
+# add sum of neighoring trees make no sense
+
+# model sensitivity tests
+mod.shrub_adult.diags <- augment(mod.shrub_adult5)
+qplot(data=mod.shrub_adult.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.shrub_adult.diags, x= pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+
+qqPlot(resid(mod.shrub_adult5))
+
+sjp.lmer(mod.shrub_adult5, type='fe')
+sjp.lmer(mod.shrub_adult5, type='re', sort.est="sort.all" )
+
+summary(mod.shrub_adult5, correlation=FALSE)
+
+
+```
+Robi, I have one question here. For the tree survival analysis, the model considering interation between pesticide and census fits better than those without the interaction. Should we keep the interacton term? (See code: anova(mod.tree_adult1, mod.tree_adult8, mod.tree_adult13, mod.tree_adult14, mod.tree_adult15) Line 298) If so, how to interpret the results? I mean, several interactions between fungicide and censuses are negative. Is that mean they compared with the water treatment in first census?
+
+
+
+### Density dependence
+```{r densitydependence}
+##------------------------- Density dependence-------------------------##
+
+## For all tree species together
+ggplot(data=subset(pestdat.ag_adult, growth.form=='tree'), 
+       aes(x=total, y=survs/total, colour=pesticide)) + 
+  geom_jitter()+
+  geom_smooth(aes(weight = total), method='glm', method.args=list(family="binomial")) +
+  facet_wrap(~exclosure)
+
+# hard to transform the density of seendlings to normal distributed
+hist(pestdat.ag_adult$total)
+hist(log10(pestdat.ag_adult$total))
+
+pestdat.ag_adult$dens <- (pestdat.ag_adult$total - mean(pestdat.ag_adult$total))/(2*sd(pestdat.ag_adult$total))
+
+
+mod.tree.ddst_adult1 <- glmer(cbind(survs, deaths) ~ site + pesticide + exclosure + census + A.con_curt + A.het_curt + dens + (1|quad.unique) + (1|sp.),
+                             data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                             control=glmerControl(optimizer="optimx",
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.tree.ddst_adult2 <- glmer(cbind(survs, deaths) ~ pesticide + exclosure + census + A.con_curt + A.het_curt + dens + (1|plot/quadrat) + (1|sp.),
+                             data=subset(pestdat.ag_adult, growth.form=='tree'), family=binomial, 
+                             control=glmerControl(optimizer="optimx",
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.tree_adult8, mod.tree.ddst_adult1, mod.tree.ddst_adult2)
+
+mod.tree.ddst_adult.diags <- augment(mod.tree.ddst_adult1)
+qplot(data=mod.tree.ddst_adult.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data =mod.tree.ddst_adult.diags, x= pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+
+qqPlot(resid(mod.tree.ddst_adult1))
+sjp.lmer(mod.tree.ddst_adult1, type='fe')
+sjp.lmer(mod.tree.ddst_adult1, type='re', sort.est="sort.all" )
+
+summary(mod.tree.ddst_adult1, correlation=FALSE)
+
+
+
+##------------------------- individual species -------------------------------##
+## And now pulling the species apart. 
+## First need to filter down to species that can be analysed - need enough
+## reps (lets say 10) and variation in abundance (at least > 5 
+sp.counts <- summarise(group_by(pestdat.ag_adult, sp.), 
+                       n.quadrat=length(total), max.dens=max(total), min.dens=min(total))
+
+sp.counts$range <- sp.counts$max.dens - sp.counts$min.dens
+sp.sel <- sp.counts$sp.[sp.counts$n.quadrat > 10 & sp.counts$range > 5]
+sp.counts[sp.counts$sp. %in% sp.sel,]
+
+ggplot(data=subset(pestdat.ag_adult, sp. %in% sp.sel), 
+       aes(x=total, y=survs/total, colour=pesticide)) + 
+  geom_jitter()+
+  geom_smooth(aes(weight = total), method='glm',
+              method.args=list(family="binomial"), fullrange=T) +
+  facet_wrap(~ sp.,  scales='free')
+
+
+# it seems only eight species have enough data, but conference intervals of ACMO and QUMO are too huge
+
+## quick plot of only the species for which there appear to be enough data
+# sp.sel2 <- c('ABNE', 'ACBA', 'ACMO', 'ACPS', 'ACTE', 'FRMA', 'PIKO', 'QUMO', 'TIAM')
+sp.sel2 <- c('ACBA', 'ACPS', 'ACTE', 'FRMA', 'PIKO', 'TIAM')
+
+ggplot(data=subset(pestdat.ag_adult, sp. %in% sp.sel2), 
+       aes(x=total, y=survs/total, colour=pesticide)) + 
+  geom_jitter()+
+  geom_smooth(aes(weight = total), method='glm',
+              method.args=list(family="binomial"), fullrange=T) +
+  facet_wrap(~ sp. + exclosure,  scales='free')
+
+nddmods <- sapply(sp.sel2, function(sp){
+  print(sp)
+  spdat <- filter(pestdat.ag_adult, sp. == sp)
+  ## to increase ability to fit models, standardise total
+  spdat$dens <- (spdat$total - mean(spdat$total))/(2*sd(spdat$total))
+  spdat <- droplevels(spdat)
+  mod <- glmer(cbind(survs, deaths) ~ site + pesticide + exclosure + census +
+                 A.con_curt + A.het_curt + dens + (1|quad.unique), 
+               data=spdat, family=binomial, 
+               control=glmerControl(optimizer="optimx",
+                                    optCtrl=list(method=c('bobyqa', 'Nelder-Mead')))
+  )
+}, simplify=FALSE)
+
+## diagnostic plots
+indmods.resids <- lapply(nddmods, augment) 
+
+indmods.resids <- do.call('rbind', mapply(function(spnm, dat) {
+  dat$species <- spnm
+  return(dat)
+}, spnm=as.list(names(indmods.resids)), dat=indmods.resids, 
+SIMPLIFY=FALSE))
+
+ggplot(data=indmods.resids, aes(x=.fitted, y=.wtres, colour=pesticide)) +
+  geom_jitter() + geom_smooth() + facet_wrap(~species, scales='free') +
+  geom_hline(yintercept=0, linetype='dashed')
+
+library(lattice)
+lapply(nddmods, function(mod){
+  dotplot(ranef(mod, condVar=TRUE))})
+
+lapply(nddmods, function(x) summary(x, correlation=FALSE))
+lapply(nddmods, function(x) anova(x))
+
+
+##---------------- Survival of other tree seedlings-------------------##
+# sp.sel2 <- c('ACBA', 'ACPS', 'ACTE', 'FRMA', 'PIKO', 'TIAM')
+## other tree species
+pestdat.tree_adult1 <- pestdat.ag_adult[pestdat.ag_adult$growth.form == 'tree',][!(pestdat.ag_adult[pestdat.ag_adult$growth.form == 'tree',]$sp. %in% sp.sel2),]
+  
+summary(pestdat.tree_adult1)
+
+mod.s.t_adult.r1 <- glmer(cbind(survs, deaths) ~ site + pesticide + exclosure + census + 
+                                 A.con_curt + A.het_curt + (1|quad.unique) + (1|sp.),
+                             data=pestdat.tree_adult1, family=binomial, 
+                             control=glmerControl(optimizer="optimx", 
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.s.t_adult.r2 <- glmer(cbind(survs, deaths) ~ pesticide + exclosure + census + 
+                                 A.con_curt + A.het_curt + (1|plot/quad.unique) + (1|sp.),
+                             data=pestdat.tree_adult1, family=binomial, 
+                             control=glmerControl(optimizer="optimx", 
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+anova(mod.s.t_adult.r1, mod.s.t_adult.r2)
+
+# first, check the random effects
+sjp.lmer(mod.s.t_adult.r2, type='re', sort.est="sort.all", p.kr = FALSE)
+## setting plot as random effects doesn't take any variance, the first model with site as fixed effect woulb be appropriate
+
+mod.s.t_adult.r.diags <- augment(mod.s.t_adult.r1)
+qplot(data=mod.s.t_adult.r.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data=mod.s.t_adult.r.diags, x=pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+## plot fixed and random effects
+sjp.lmer(mod.s.t_adult.r1, type='fe', p.kr = FALSE)
+sjp.lmer(mod.s.t_adult.r1, type='re', sort.est="sort.all", p.kr = FALSE)
+
+qqPlot(resid(mod.s.t_adult.r1))
+
+summary(mod.s.t_adult.r1, correlation=FALSE)
+
+# no significant effect for the rest tree seedlings
+
+```
+Overall, fungicide slightly higher survival of tree seedlings pooled. Effect of conspecific neighboring trees is negative while effect of heterospecific neighboring trees is positive. Seedling density shows negative density dependence. 
+When tested at species level. Results are consistent with that at community-level.Fungicide heigher survival of two out of nine abundant species (PIKO and TIAM). Conspecific neighboring trees have negative effect on seedling survival of TIAM. Heterospecific neighboring trees have positive effect on ACTE and FRAM. Negative density shows in FRMA and TIAM.
+Fungicide heigher suvival when the rest of tree species pooled (i.e., not including the common species).
+
+
+
+### Analysis of Tree Recruitment
+Tree recruitments mainly occur in the first census (spring), we only use two spring censuses (16sp and 17sp) in testing recruitment.
+```{r pestrecruitanalysis}
+
+###-------------------- recruitment annlysis -----------------------------###
+pest.rect.ag_adult <- read.csv("data/pest.rect.ag_adult.csv")
+pest.rect.ag_adult$pesticide <- factor(pest.rect.ag_adult$pesticide, levels=c('W', 'F', 'I', 'C'))
+pest.rect.ag_adult$census <- factor(pest.rect.ag_adult$census)
+pest.rect.ag_adult$exclosure <- factor(pest.rect.ag_adult$exclosure)
+pest.rect.ag_adult$site <- factor(pest.rect.ag_adult$site)
+summary(pest.rect.ag_adult)
+
+
+###------------- Recruitment models ------------------###
+pest.rect.ag_adult$site <- factor(pest.rect.ag_adult$site) 
+contrasts(pest.rect.ag_adult$site) <- "contr.sum"
+
+## Only tree species
+pest.t.rect_adult <- pest.rect.ag_adult[pest.rect.ag_adult$growth.form == 'tree',]
+mod.pest.recr1 <- glmer(recruits ~ site + pesticide + exclosure + census + A.con_curt + A.het_curt +
+                          (1|quad.unique) + (1|sp.),
+                        data=pest.t.rect_adult, family=poisson, 
+                        control=glmerControl(optimizer="optimx", 
+                                             optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+sjp.lmer(mod.pest.recr1, type='fe')
+sjp.lmer(mod.pest.recr1, type='re', sort.est="sort.all" )
+
+
+## Random effects of FRMA and TIAM go extramely, try to put group them against other species as the fixed effect
+pest.t.rect_adult$sp.group <- ifelse(pest.t.rect_adult$sp.=='FRMA' | pest.t.rect_adult$sp.=='TIAM', 1, 0)
+
+pest.t.rect_adult$sp.group <- factor(pest.t.rect_adult$sp.group) 
+contrasts(pest.t.rect_adult$site) <- "contr.sum"
+summary(pest.t.rect_adult)
+
+mod.pest.recr2 <- glmer(recruits ~ site + pesticide + exclosure + census + 
+                          A.con_curt + A.het_curt + sp.group +
+                          (1|quad.unique) + (1|sp.),
+                        data=pest.t.rect_adult, family=poisson, 
+                        control=glmerControl(optimizer="optimx", 
+                                             optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.pest.recr3 <- glmer(recruits ~ pesticide + exclosure + census + 
+                          A.con_curt + A.het_curt + sp.group +
+                          (1|plot/quadrat) + (1|sp.),
+                        data=pest.t.rect_adult, family=poisson, 
+                        control=glmerControl(optimizer="optimx", 
+                                             optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+anova(mod.pest.recr1, mod.pest.recr2, mod.pest.recr3)
+
+mod.pest.recr.diags2 <- augment(mod.pest.recr2)
+qplot(data=mod.pest.recr.diags2, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.pest.recr.diags2, x= pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+
+qqPlot(resid(mod.pest.recr2))
+
+sjp.lmer(mod.pest.recr2, type='fe')
+sjp.lmer(mod.pest.recr2, type='re', sort.est="sort.all" )
+summary(mod.pest.recr2, correlation=FALSE)
+
+##The latter model considering fits better, but results do not's change, so it's ok to use the previous model 
+
+
+###---------------- individual species analysis ----------------------------###
+## reps (lets say 10) and variation in abundance (at least >5
+sp.rect.counts <- summarise(group_by(pest.t.rect_adult, sp.), 
+                       n.quadrat=length(recruits), max.rect=max(recruits), min.rect=min(recruits))
+
+sp.rect.counts$range <- sp.rect.counts$max.rect - sp.rect.counts$min.rect
+sp.rect.sel <- sp.rect.counts$sp.[sp.rect.counts$n.quadrat > 10 & sp.rect.counts$range > 5]
+sp.rect.counts[sp.rect.counts$sp. %in% sp.rect.sel,]
+
+# sp.rect.sel2 <- c('ABNE', 'ACBA',  'ACPS', 'ACTE', 'FRMA', 'PIKO','QUMO', 'TIAM')
+sp.rect.sel2 <- c('ACBA',  'ACPS', 'ACTE', 'FRMA', 'PIKO','QUMO', 'TIAM')
+
+rectmods <- sapply(sp.rect.sel2, function(sp){
+  print(sp)
+  spdat <- filter(pest.t.rect_adult, sp. == sp)
+  spdat <- droplevels(spdat)
+  mod <- glmer(recruits ~ site + pesticide + exclosure + census +
+                 A.con_curt + A.het_curt + (1|quad.unique), 
+               data=spdat, family=poisson, 
+               control=glmerControl(optimizer="optimx",
+                                    optCtrl=list(method=c('bobyqa', 'Nelder-Mead')))
+  )
+}, simplify=FALSE)
+
+## diagnostic plots
+indmods.rect.resids <- lapply(rectmods, augment) 
+
+indmods.rect.resids <- do.call('rbind', mapply(function(spnm, dat) {
+  dat$species <- spnm
+  return(dat)
+}, spnm=as.list(names(indmods.rect.resids)), dat=indmods.rect.resids, 
+SIMPLIFY=FALSE))
+
+ggplot(data=indmods.rect.resids, aes(x=.fitted, y=.wtres, colour=pesticide)) +
+  geom_jitter() + geom_smooth() + facet_wrap(~species, scales='free') +
+  geom_hline(yintercept=0, linetype='dashed')
+
+lapply(rectmods, function(mod){
+  dotplot(ranef(mod, condVar=TRUE))})
+
+lapply(rectmods, function(x) summary(x, correlation=FALSE))
+lapply(rectmods, function(x) anova(x))
+
+
+
+###----------------- Pooling other species -------------------------###
+
+# sp.rect.sel2 <- c('ACBA',  'ACPS', 'ACTE', 'FRMA', 'PIKO','QUMO', 'TIAM')
+pest.t.rect.other_adult <- pest.t.rect_adult[!(pest.t.rect_adult$sp. %in% sp.rect.sel2),]
+summary(pest.t.rect.other_adult)
+
+mod.pest.recr.other <- glmer(recruits ~ site + census + pesticide + exclosure + A.con_curt + A.het_curt +
+                               (1|quad.unique) + (1|sp.),
+                             data=pest.t.rect.other_adult, family=poisson, 
+                             control=glmerControl(optimizer="optimx", 
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.pest.recr.other.diags <- augment(mod.pest.recr.other)
+qplot(data=mod.pest.recr.other.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.pest.recr.other.diags, x= pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+
+qqPlot(resid(mod.pest.recr.other))
+sjp.lmer(mod.pest.recr.other, type='fe')
+sjp.lmer(mod.pest.recr.other, type='re', sort.est="sort.all" )
+summary(mod.pest.recr.other, correlation=FALSE)
+
+
+```
+Overall, fungicide higher recruitment, conspecific neigboring trees had a positive effect on recruitment. Tested at species level, fungicide increased recruitment of ACPS, TIAM. Conspecific neighboring trees increased recruitment of ACPS, slightly enhanced TIAM. Heterospecific neighboring trees increased recruitment of FRMA but decreased ACPS. Exclosure enhanced recruitment of ACPS. Pesticide had no effect on recruitment of the rest of species.
+
+
+
+### Growth analysis
+Growth is calculated as the absolute values from the census to the next. SND are used to calculate the growth of seedlings, and outliers are estimated and removed in the final dataset.
+```{r pestgrowthanalysis}
+
+## read in data
+pestdat.g_adult <- read.csv("data/pestdat.g_adult.csv")
+summary(pestdat.g_adult)
+
+###----------------------- Growth models ------------------------------###
+pestdat.g_adult$pesticide <- factor(pestdat.g_adult$pesticide, levels=c('W', 'F', 'I', 'C'))
+pestdat.g_adult$census <- factor(pestdat.g_adult$census)
+pestdat.g_adult$exclosure <- factor(pestdat.g_adult$exclosure)
+pestdat.g_adult$site <- factor(pestdat.g_adult$site)
+contrasts(pestdat.g_adult$site) <- "contr.sum"
+
+## tree
+mod.pest.tree.grow1 <- lmer(grow.snd ~ site + pesticide + exclosure + census + A.con_curt + A.het_curt +
+                         (1|quad.unique) + (1|sp.), 
+                       data=subset(pestdat.g_adult, growth.form == 'tree'))
+mod.pest.tree.grow2 <- lmer(grow.snd ~ site + pesticide + exclosure + census + A.con_curt + A.het_curt +
+                         (1|quad.unique) + (1|sp.) + (1|tag), 
+                       data=subset(pestdat.g_adult, growth.form == 'tree'))
+mod.pest.tree.grow3 <- lmer(grow.snd ~ site + pesticide + exclosure + census +  
+                         (1|quad.unique) + (1|sp.), 
+                       data=subset(pestdat.g_adult, growth.form == 'tree'))
+mod.pest.tree.grow4 <- lmer(grow.snd ~ site + pesticide + exclosure +  
+                              (1|quad.unique) + (1|census) + (1|sp.), 
+                            data=subset(pestdat.g_adult, growth.form == 'tree'))
+
+anova(mod.pest.tree.grow1, mod.pest.tree.grow2, mod.pest.tree.grow3, mod.pest.tree.grow4)
+
+mod.pest.tree.grow.diags <- augment(mod.pest.tree.grow1)
+qplot(data=mod.pest.tree.grow.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.pest.tree.grow.diags, x= pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+qqPlot(resid(mod.pest.tree.grow1))
+summary(mod.pest.tree.grow1, correlation=FALSE)
+
+###------------------- season and year effect? --------------------------###
+unique(pestdat.g_adult$census)
+pestdat.g_adult$season <- ifelse(pestdat.g_adult$census=="16sp" | 
+                                   pestdat.g_adult$census=="17sp", "spring","fall")
+pestdat.g_adult$year <- ifelse(pestdat.g_adult$census=="15fa" | 
+                                   pestdat.g_adult$census=="16sp", "1","2")
+
+str(pestdat.g_adult)
+
+
+mod.pest.tree.grow5 <- lmer(grow.snd ~ site + pesticide + exclosure + season*year + A.con_curt + A.het_curt +
+                              (1|quad.unique) + (1|sp.), 
+                            data=subset(pestdat.g_adult, growth.form == 'tree'))
+mod.pest.tree.grow6 <- lmer(grow.snd ~ site + pesticide + exclosure + season + year + A.con_curt + A.het_curt +
+                              (1|quad.unique) + (1|sp.), 
+                            data=subset(pestdat.g_adult, growth.form == 'tree'))
+
+anova(mod.pest.tree.grow1, mod.pest.tree.grow5, mod.pest.tree.grow6)
+summary(mod.pest.tree.grow5, correlation=FALSE)
+
+
+## shrub
+mod.pest.shrub.grow1 <- lmer(grow.snd ~ site + pesticide + exclosure + A.sum_curt + census + 
+                         (1|quad.unique) + (1|sp.), 
+                       data=subset(pestdat.g_adult, growth.form == 'shrub'))
+mod.pest.shrub.grow2 <- lmer(grow.snd ~ site + pesticide + exclosure + census + 
+                               (1|quad.unique) + (1|sp.), 
+                             data=subset(pestdat.g_adult, growth.form == 'shrub'))
+mod.pest.shrub.grow3 <- lmer(grow.snd ~ site + pesticide + exclosure +census + 
+                         (1|quad.unique) + (1|sp.) + (1|tag), 
+                       data=subset(pestdat.g_adult, growth.form == 'shrub'))
+
+anova(mod.pest.shrub.grow1, mod.pest.shrub.grow2, mod.pest.shrub.grow3)
+
+mod.pest.shrub.grow.diags <- augment(mod.pest.shrub.grow2)
+qplot(data=mod.pest.shrub.grow.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.pest.shrub.grow.diags, x= pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+qqPlot(resid(mod.pest.shrub.grow2))
+summary(mod.pest.shrub.grow2, correlation=FALSE)
+
+
+##------------------------- individual species -------------------------------##
+## And now pulling the species apart. 
+## First need to filter down to species that can be analysed - need enough
+## reps (lets say 5) and variation in abundance (at least 2x 
+sp.grow.counts <- summarise(group_by(pestdat.g_adult, sp.), 
+                            n.indiv=length(grow.snd), n.quadrat=length(unique(grow.snd)))
+
+sp.grow.sel <- sp.grow.counts$sp.[sp.grow.counts$n.indiv > 50 & sp.grow.counts$n.quadrat > 10]
+sp.grow.counts[sp.grow.counts$sp. %in% sp.grow.sel,]
+
+sp.grow.sel2 <- c('ACBA','ACKO','ACMA','ACMO','ACPS','ACTE','CEOR','DEGL','EUAL','EUMA', 
+                  'FRMA','LOSP','PHSC','QUMO','RIMX','SPCH','SYRE', 'TIAM')
+
+growmods <- sapply(sp.grow.sel2, function(sp){
+  print(sp)
+  spdat <- filter(pestdat.g_adult, sp. == sp)
+  spdat <- droplevels(spdat)
+  mod <- lmer(grow.snd ~ site + pesticide + exclosure + 
+                 A.con_curt + A.het_curt + census + (1|quad.unique), 
+               data=spdat)
+}, simplify=FALSE)
+
+## diagnostic plots
+indmods.grow.resids <- lapply(growmods, augment) 
+
+indmods.grow.resids <- do.call('rbind', mapply(function(spnm, dat) {
+  dat$species <- spnm
+  return(dat)
+}, spnm=as.list(names(indmods.grow.resids)), dat=indmods.grow.resids, 
+SIMPLIFY=FALSE))
+
+ggplot(data=indmods.grow.resids, aes(x=.fitted, y=.wtres, colour=pesticide)) +
+  geom_jitter() + geom_smooth() + facet_wrap(~species, scales='free') +
+  geom_hline(yintercept=0, linetype='dashed')
+
+library(lattice)
+lapply(growmods, function(mod){
+  dotplot(ranef(mod, condVar=TRUE))})
+
+lapply(growmods, function(x) summary(x, correlation=FALSE))
+lapply(growmods, function(x) anova(x))
+
+
+##------------------------ Other species ------------------------##
+pestdat.g.other_adult <- pestdat.g_adult[!(pestdat.g_adult$sp. %in% sp.grow.sel2),]
+mod.pest.other.grow <- lmer(grow.snd ~ site + pesticide + exclosure + A.con_curt + A.het_curt + census + 
+                              (1|quad.unique) + (1|sp.), data=pestdat.g.other_adult)
+
+mod.pest.other.grow.diags <- augment(mod.pest.other.grow)
+qplot(data=mod.pest.other.grow.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.pest.other.grow.diags, x= pesticide, y=.wtres, geom="boxplot", colour=exclosure) 
+qqPlot(resid(mod.pest.other.grow))
+summary(mod.pest.other.grow, correlation=FALSE)
+
+```
+Pesticide had no effect on growth of seedlings. Results are consistent both at community- and species-level. Exclosure increased growth of the species other than the common species.
+
+
+### Diversity analysis
+First, trees and shrubs are pooled and estimated the Shannon' H and Inversimpson indexes. Next, trees and shrubs are estimated seperately. 
+```{r pestwooddiversity}
+
+library(vegan)
+##----------------------- Overall --------------------------##
+
+divers_woodpest <- summarise(
+  group_by(pestdat.ag_adult, site, plot, quadrat, quad.unique, pesticide, exclosure, census), 
+  shannon=diversity(survs), simpson=diversity(survs, index='invsimpson'), species=specnumber(survs))
+
+adult.ngbr.inf <- read.csv("data/adult.ngbr.inf.csv")
+
+divers_woodpest$A.sum <- adult.ngbr.inf$A.sum[match(divers_woodpest$quad.unique, adult.ngbr.inf$quad.unique)]
+summary(divers_woodpest)
+divers_woodpest$A.sum_curt <- divers_woodpest$A.sum^(1/3)
+
+
+ggplot(divers_woodpest, aes(x=pesticide, y=shannon, colour = exclosure)) +  geom_boxplot()
+
+divers_woodpest$census <- factor(divers_woodpest$census, levels=c('16sp', '16fa', '17sp', '17fa'))
+
+summarise(group_by(divers_woodpest, pesticide, exclosure, census), meanH=mean(shannon), 
+          seH=sd(shannon)/sqrt(length(shannon))) %>%
+  ggplot(aes(x=pesticide, y=meanH, ymin=meanH-seH, ymax=meanH+seH, colour=census, 
+             shape=as.factor(exclosure))) + geom_pointrange() + coord_trans(y="exp") +
+  labs(x="pesticide", y="Effective number of species")
+
+
+### shannon diversity
+mod.wood.shannon1 <- lmer(shannon ~ site + pesticide*exclosure + census+ (1|quad.unique), data=divers_woodpest)
+mod.wood.shannon2 <- lmer(shannon ~ site + pesticide + exclosure + census + (1|quad.unique), data=divers_woodpest)
+mod.wood.shannon3 <- lmer(shannon ~ site + pesticide + exclosure + census + A.sum_curt +
+                            (1|quad.unique), data=divers_woodpest)
+mod.wood.shannon4 <- lmer(shannon ~ pesticide + exclosure + census + (1|plot/quadrat), data=divers_woodpest)
+
+anova(mod.wood.shannon1, mod.wood.shannon2, mod.wood.shannon3, mod.wood.shannon4)
+
+plot(mod.wood.shannon2, type=c('p', 'smooth'))
+library(sjPlot)
+sjp.lmer(mod.wood.shannon2, type='fe')
+sjp.lmer(mod.wood.shannon2, type='re', sort.est="sort.all" )
+summary(mod.wood.shannon2, correlation=FALSE)
+
+##----------------------- More diversity indices -------------------------##
+
+### Invsimpson
+range(divers_woodpest$simpson)
+divers_woodpest1 <- subset(divers_woodpest, simpson != Inf)
+
+mod.wood.simpson1 <- lmer(simpson ~ site + pesticide*exclosure + census + (1|quad.unique), data=divers_woodpest1)
+mod.wood.simpson2 <- lmer(simpson ~ site + pesticide + exclosure + census + (1|quad.unique), data=divers_woodpest1)
+mod.wood.simpson3 <- lmer(simpson ~ site + pesticide + exclosure + census + A.sum_curt +
+                             (1|quad.unique), data=divers_woodpest1)
+
+anova(mod.wood.simpson1, mod.wood.simpson2, mod.wood.simpson3)
+
+plot(mod.wood.simpson2, type=c('p', 'smooth'))
+sjp.lmer(mod.wood.simpson2, type='fe')
+sjp.lmer(mod.wood.simpson2, type='re', sort.est="sort.all" )
+qqPlot(resid(mod.wood.simpson2))
+
+summary(mod.wood.simpson2, correlation=FALSE)
+
+
+### Pielou's evenness (J)
+table(divers_woodpest$species)
+# need to remove those with less than 1 species, do not test this index in trees and shrubs seperately.
+divers_woodpest2 <- subset(divers_woodpest, species > 1)
+divers_woodpest2$evenness <- divers_woodpest2$shannon/log(divers_woodpest2$species)
+
+mod.wood.evenness1 <- lmer(evenness ~ site +  pesticide*exclosure + census +(1|quad.unique), data=divers_woodpest2)
+mod.wood.evenness2 <- lmer(evenness ~ site + pesticide + exclosure + census +(1|quad.unique), data=divers_woodpest2)
+mod.wood.evenness3 <- lmer(evenness ~ site + pesticide + exclosure + census +A.sum_curt +
+                            (1|quad.unique), data=divers_woodpest2)
+anova(mod.wood.evenness1, mod.wood.evenness2, mod.wood.evenness3)
+
+plot(mod.wood.evenness2, type=c('p', 'smooth'))
+
+library(sjPlot)
+sjp.lmer(mod.wood.evenness2, type='fe')
+sjp.lmer(mod.wood.evenness2, type='re', sort.est="sort.all" )
+qqPlot(resid(mod.wood.evenness2))
+
+summary(mod.wood.evenness2, correlation=FALSE)
+summary(mod.wood.evenness3, correlation=FALSE)
+
+
+
+###-------------------- Trees, shrubs -------------------------###
+## Split into two growth forms: trees and shrubs
+divers_tspest <- summarise(
+  group_by(pestdat.ag_adult, site, plot, quadrat, quad.unique, growth.form, pesticide, exclosure, census), 
+  shannon=diversity(survs), simpson=diversity(survs, index='invsimpson'), species=specnumber(survs))
+
+divers_tspest$A.sum <- adult.ngbr.inf$A.sum[match(divers_tspest$quad.unique, adult.ngbr.inf$quad.unique)]
+summary(divers_tspest)
+divers_tspest$A.sum_curt <- divers_tspest$A.sum^(1/3)
+
+
+### Trees
+# shannon diversity
+mod.tree.shannon1 <- lmer(shannon ~ site + census + pesticide*exclosure + (1|quad.unique), 
+                          data=subset(divers_tspest, growth.form=='tree'))
+mod.tree.shannon2 <- lmer(shannon ~ site + census + pesticide + exclosure + (1|quad.unique),
+                          data=subset(divers_tspest, growth.form=='tree'))
+mod.tree.shannon3 <- lmer(shannon ~ site + census + pesticide + exclosure + A.sum_curt +
+                            (1|quad.unique), data=subset(divers_tspest, growth.form=='tree'))
+anova(mod.tree.shannon1, mod.tree.shannon2, mod.tree.shannon3)
+
+plot(mod.tree.shannon2, type=c('p', 'smooth'))
+qqPlot(resid(mod.tree.shannon2))
+sjp.lmer(mod.tree.shannon2, type='fe')
+sjp.lmer(mod.tree.shannon2, type='re', sort.est="sort.all" )
+
+summary(mod.tree.shannon2, correlation=FALSE)
+
+
+## Invsimpson
+divers_tspest1 <- subset(divers_tspest, simpson != Inf)
+mod.tree.simpson <- lmer(simpson ~ site + census + pesticide + exclosure + (1|quad.unique), 
+                         data=subset(divers_tspest1, growth.form=='tree'))
+
+plot(mod.tree.simpson, type=c('p', 'smooth'))
+qqPlot(resid(mod.tree.simpson))
+sjp.lmer(mod.tree.simpson, type='fe')
+sjp.lmer(mod.tree.simpson, type='re', sort.est="sort.all" )
+
+summary(mod.tree.simpson, correlation=FALSE)
+
+
+
+#### shrub
+# shannon diversity
+mod.shrub.shannon1 <- lmer(shannon ~ site + census + pesticide*exclosure + (1|quad.unique), 
+                           data=subset(divers_tspest, growth.form=='shrub'))
+mod.shrub.shannon2 <- lmer(shannon ~ site + census + pesticide + exclosure + (1|quad.unique),
+                           data=subset(divers_tspest, growth.form=='shrub'))
+mod.shrub.shannon3 <- lmer(shannon ~ site + census + pesticide + exclosure + A.sum_curt +
+                             (1|quad.unique), data=subset(divers_tspest, growth.form=='shrub'))
+anova(mod.shrub.shannon1, mod.shrub.shannon2, mod.shrub.shannon3)
+
+plot(mod.shrub.shannon2, type=c('p', 'smooth'))
+qqPlot(resid(mod.shrub.shannon2))
+sjp.lmer(mod.shrub.shannon2, type='fe')
+sjp.lmer(mod.shrub.shannon2, type='re', sort.est="sort.all" )
+
+summary(mod.shrub.shannon2, correlation=FALSE)
+
+
+## Invsimpson
+mod.shrub.simpson <- lmer(simpson ~ site + census + pesticide + exclosure + (1|quad.unique), 
+                          data=subset(divers_tspest1, growth.form=='shrub'))
+
+plot(mod.shrub.simpson, type=c('p', 'smooth'))
+qqPlot(resid(mod.shrub.simpson))
+sjp.lmer(mod.shrub.simpson, type='fe')
+sjp.lmer(mod.shrub.simpson, type='re', sort.est="sort.all" )
+
+summary(mod.shrub.simpson, correlation=FALSE)
+
+
+```
+When trees and shrubs are pooled in the diversity test, pesticide had no effect on diversity. Exclosure lower diversity. When trees and shrubs are estimated seperately, fungicide higher diversity of tree seedlings.  
+
