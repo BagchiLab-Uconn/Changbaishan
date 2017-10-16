@@ -1,0 +1,718 @@
+---
+title: "NewSnowAnalysis"
+author: "Shihong Jia"
+date: "Oct. 16, 2017"
+output: html_document
+---
+  
+  ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load packages
+``` {r loadlibs, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(cowplot)
+library(lme4)
+library(pbkrtest)
+library(tidyr)
+library(dplyr)
+library(optimx)
+library(broom)
+```
+
+### Data description
+Seven censuses were conducted in this experiment (from 14fa to 17fa, twice a year). Only those seedlings inside exclosures were used in the analyses. Treatment: C (no manipulation), S (snow removal treatment).
+
+
+
+### Initial analysis
+```{r intialanalysis}
+
+getwd()
+
+## Read in data
+snowdat.ag_adult <- read.csv("data/snowdat.ag_adult.csv")
+
+snowdat.ag_adult$census <- factor(snowdat.ag_adult$census)
+snowdat.ag_adult$site <- factor(snowdat.ag_adult$site)
+snowdat.ag_adult$census <- factor(snowdat.ag_adult$census, levels=c('15sp', '15fa', '16sp', '16fa','17sp','17fa'))
+summary(snowdat.ag_adult)
+
+
+###------------------------ Initial plots -------------------------###
+ggplot(data=snowdat.ag_adult, 
+       aes(x=treatment, y=survs/total, colour=as.factor(census))) + 
+  geom_boxplot() +
+  facet_wrap(~growth.form)
+
+group_by(snowdat.ag_adult, treatment, growth.form, census) %>% 
+  summarise(surv = mean(survs/total), 
+            se.survs=sd(survs/total)/sqrt(length(survs/total))) %>% 
+  ggplot(aes(x=treatment, y=surv, ymin=surv-se.survs, ymax=surv+se.survs, 
+             colour=as.factor(census))) + geom_errorbar() + geom_point() +
+  facet_wrap(~growth.form) 
+
+group_by(snowdat.ag_adult, treatment, growth.form, census) %>% 
+  summarise(surv = mean(survs/total), 
+            se.survs=sd(survs/total)/sqrt(length(survs/total))) %>% 
+  ggplot(aes(x=census, y=surv, ymin=surv-se.survs, ymax=surv+se.survs, 
+             colour=as.factor(treatment))) + geom_errorbar() + geom_point() +
+  facet_wrap(~growth.form) 
+
+
+###----------------------- Survival models ------------------------###
+snowdat.ag_adult$site <- factor(snowdat.ag_adult$site)
+contrasts(snowdat.ag_adult$site) <- "contr.sum"
+
+#### tree
+## with or without neighboring trees
+mod.snow.tree.surv1 <- glmer(cbind(survs, deaths) ~ site + treatment + A.con_curt + A.het_curt +
+                               (1|quad.unique) + (1|sp.) + (1|census),
+                             data=subset(snowdat.ag_adult, growth.form=='tree'), family=binomial, 
+                             control=glmerControl(optimizer="optimx", 
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+# without neighboring trees
+mod.snow.tree.surv2 <- glmer(cbind(survs, deaths) ~ site + treatment +
+                               (1|quad.unique) + (1|sp.) + (1|census),
+                             data=subset(snowdat.ag_adult, growth.form=='tree'), family=binomial, 
+                             control=glmerControl(optimizer="optimx", 
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+anova(mod.snow.tree.surv1, mod.snow.tree.surv2)
+
+# adding area of neighboring trees make no sense to the model, but I would like to keep it as the same as the survival analysis of the pesticide experiment.
+
+# model sensitivity tests
+mod.snow.tree.surv.diags <- augment(mod.snow.tree.surv2)
+qplot(data=mod.snow.tree.surv.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data=mod.snow.tree.surv.diags, x=treatment, y=.wtres, geom="boxplot") 
+
+library(car)
+qqPlot(resid(mod.snow.tree.surv1))
+
+library(sjPlot)
+sjp.lmer(mod.snow.tree.surv2, type='fe')
+sjp.lmer(mod.snow.tree.surv2, type='re', sort.est="sort.all" )
+
+summary(mod.snow.tree.surv2, correlation=FALSE)
+
+##-----------------------------##
+# Snow removal treatment didn't change the survival of seedlings, 
+# but the BLUP values of census show that snow removal duration 
+# may has a potential relationship with survival.
+
+#### duration
+## duration is presented as months from the beginning of the experiment
+snowdat.ag_adult$duration <- ifelse(snowdat.ag_adult$census=="15sp", 9,
+                                    ifelse(snowdat.ag_adult$census=="15fa", 12,
+                                           ifelse(snowdat.ag_adult$census=="16sp", 21,
+                                                  ifelse(snowdat.ag_adult$census=="16fa", 24,
+                                                         ifelse(snowdat.ag_adult$census=="17sp", 32,
+                                                                ifelse(snowdat.ag_adult$census=="17fa", 35, NA))))))
+summary(snowdat.ag_adult)
+
+
+#### tree
+mod.snow.tree.surv3 <- glmer(cbind(survs, deaths) ~ site + treatment*duration +
+                               A.con_curt + A.het_curt +
+                               (1|quad.unique) + (1|sp.),
+                             data=subset(snowdat.ag_adult, growth.form=='tree'), family=binomial, 
+                             control=glmerControl(optimizer="optimx", 
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.snow.tree.surv4 <- glmer(cbind(survs, deaths) ~ treatment*duration +
+                               A.con_curt + A.het_curt +
+                               (1|quad.unique) + (1|census) + (1|sp.),
+                             data=subset(snowdat.ag_adult, growth.form=='tree'), family=binomial, 
+                             control=glmerControl(optimizer="optimx", 
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.snow.tree.surv1, mod.snow.tree.surv3, mod.snow.tree.surv4)
+
+mod.snow.tree.surv.diags <- augment(mod.snow.tree.surv4)
+qplot(data=mod.snow.tree.surv.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+sjp.lmer(mod.snow.tree.surv4, type='re', sort.est="sort.all" )
+qqPlot(resid(mod.snow.tree.surv4))
+summary(mod.snow.tree.surv4, correlation=FALSE)
+## only according to AIC values, model 4 is better. But the model looks problemic.Other approaches?
+
+
+#### season
+snowdat.ag_adult$season <- ifelse(snowdat.ag_adult$census=='15fa'| 
+                                    snowdat.ag_adult$census=='16fa'|
+                                    snowdat.ag_adult$census=='17fa', 'fa', 'sp')
+mod.snow.tree.surv5 <- glmer(cbind(survs, deaths) ~ site + treatment*season +
+                               A.con_curt + A.het_curt +
+                               (1|quad.unique) + (1|census) + (1|sp.),
+                             data=subset(snowdat.ag_adult, growth.form=='tree'), family=binomial, 
+                             control=glmerControl(optimizer="optimx", 
+                                                  optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.snow.tree.surv1, mod.snow.tree.surv3, mod.snow.tree.surv5)
+sjp.lmer(mod.snow.tree.surv5, type='re', sort.est="sort.all" )
+summary(mod.snow.tree.surv5, correlation=FALSE)
+
+
+```
+Maybe the model considering season as fixed effect makes more sense?
+
+
+
+### Survival analysis
+```{r survivalanalysis}
+# how about the shrubs?
+#### shrub
+mod.snow.shrub.surv1 <- glmer(cbind(survs, deaths) ~ site + treatment + A.con_curt + A.het_curt +
+                                (1|quad.unique) + (1|sp.) + (1|census),
+                              data=subset(snowdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                              control=glmerControl(optimizer="optimx", 
+                                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.snow.shrub.surv2 <- glmer(cbind(survs, deaths) ~ site + treatment*duration + 
+                                (1|quad.unique) + (1|sp.),
+                              data=subset(snowdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                              control=glmerControl(optimizer="optimx", 
+                                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.snow.shrub.surv3 <- glmer(cbind(survs, deaths) ~ site + treatment*season + 
+                                (1|quad.unique) + (1|sp.) + (1|census),
+                              data=subset(snowdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                              control=glmerControl(optimizer="optimx", 
+                                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.snow.shrub.surv4 <- glmer(cbind(survs, deaths) ~ site + treatment + season + 
+                                (1|quad.unique) + (1|sp.) + (1|census),
+                              data=subset(snowdat.ag_adult, growth.form=='shrub'), family=binomial, 
+                              control=glmerControl(optimizer="optimx", 
+                                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.snow.shrub.surv1, mod.snow.shrub.surv2, mod.snow.shrub.surv3, mod.snow.shrub.surv4)
+
+mod.snow.shrub.surv.diags <- augment(mod.snow.shrub.surv3)
+qplot(data=mod.snow.shrub.surv.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qqPlot(resid(mod.snow.shrub.surv3))
+summary(mod.snow.shrub.surv3, correlation=FALSE)
+
+
+
+##------------------------- Density dependence-------------------------##
+
+## For all tree species together
+ggplot(data=subset(snowdat.ag_adult, growth.form=='tree'), 
+       aes(x=total, y=survs/total, colour=treatment)) + 
+  geom_jitter()+
+  geom_smooth(aes(weight = total), method='glm', method.args=list(family="binomial")) 
+
+# no density dependence for seedlings overall
+snowdat.ag_adult$dens <- (snowdat.ag_adult$survs - mean(snowdat.ag_adult$survs))/
+  (2*sd(snowdat.ag_adult$survs))
+
+mod.snow.tree.surv_ddst1 <- glmer(cbind(survs, deaths) ~ site + treatment*season + 
+                                    A.con_curt + A.het_curt + dens + 
+                                    (1|quad.unique) + (1|sp.) + (1|census),
+                                  data=subset(snowdat.ag_adult, growth.form=='tree'), family=binomial, 
+                                  control=glmerControl(optimizer="optimx",
+                                                       optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.snow.tree.surv_ddst2 <- glmer(cbind(survs, deaths) ~ treatment*duration + 
+                                    A.con_curt + A.het_curt + dens + 
+                                    (1|quad.unique) + (1|sp.),
+                                  data=subset(snowdat.ag_adult, growth.form=='tree'), family=binomial, 
+                                  control=glmerControl(optimizer="optimx",
+                                                       optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.snow.tree.surv5, mod.snow.tree.surv_ddst1, mod.snow.tree.surv_ddst2)
+
+mod.snow.treeddst.surv.diags <- augment(mod.snow.tree.surv_ddst1)
+qplot(data=mod.snow.treeddst.surv.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qqPlot(resid(mod.snow.tree.surv_ddst1))
+summary(mod.snow.tree.surv_ddst1, correlation=FALSE)
+
+
+##------------------------- individual species -----------------------------##
+## And now pulling the species apart. 
+## First need to filter down to species that can be analysed - need enough
+## reps (lets say 10) and variation in abundance (at least >5 
+sp.snow.surv.counts <- summarise(group_by(snowdat.ag_adult, sp.), 
+                                 n.quadrat=length(survs), max.dens=max(survs), min.dens=min(survs))
+
+sp.snow.surv.counts$range <- sp.snow.surv.counts$max.dens - sp.snow.surv.counts$min.dens
+sp.snow.surv.sel <- sp.snow.surv.counts$sp.[sp.snow.surv.counts$n.quadrat > 10 & sp.snow.surv.counts$range >5]
+sp.snow.surv.counts[sp.snow.surv.counts$sp. %in% sp.snow.surv.sel,]
+
+ggplot(data=subset(snowdat.ag_adult, sp. %in% sp.snow.surv.sel), 
+       aes(x=total, y=survs/total, colour=treatment)) + 
+  geom_jitter()+
+  geom_smooth(aes(weight = total), method='glm',
+              method.args=list(family="binomial"), fullrange=T) +
+  facet_wrap(~ sp.,  scales='free')
+
+
+# it seems only six species have enough data, but conference intervals of EUVE are too huge,
+# ABNE and ACTE are excluded becasue meeting issues when fitting models
+
+## quick plot of only the species for which there appear to be enough data
+sp.snow.surv.sel2 <- c('ACPS','FRMA','TIAM')
+
+snow.survmods <- sapply(sp.snow.surv.sel2, function(sp){
+  print(sp)
+  spdat <- filter(snowdat.ag_adult, sp. == sp)
+  spdat <- droplevels(spdat)
+  mod <- glmer(cbind(survs, deaths) ~ site + treatment*season + dens +
+                 A.con_curt + A.het_curt + (1|quad.unique) + (1|census), 
+               data=spdat, family=binomial, 
+               control=glmerControl(optimizer="optimx",
+                                    optCtrl=list(method=c('bobyqa', 'Nelder-Mead')))
+  )
+}, simplify=FALSE)
+
+## diagnostic plots
+indmods.s.surv.resids <- lapply(snow.survmods, augment) 
+
+indmods.s.surv.resids <- do.call('rbind', mapply(function(spnm, dat) {
+  dat$species <- spnm
+  return(dat)
+}, spnm=as.list(names(indmods.s.surv.resids)), dat=indmods.s.surv.resids, 
+SIMPLIFY=FALSE))
+
+ggplot(data=indmods.s.surv.resids, aes(x=.fitted, y=.wtres, colour=treatment)) +
+  geom_jitter() + geom_smooth() + facet_wrap(~species, scales='free') +
+  geom_hline(yintercept=0, linetype='dashed')
+
+library(lattice)
+lapply(snow.survmods, function(mod){
+  dotplot(ranef(mod, condVar=TRUE))})
+
+lapply(snow.survmods, function(x) summary(x, correlation=FALSE))
+lapply(snow.survmods, function(x) anova(x))
+
+
+##---------------- Survival of other tree seedlings-------------------##
+# sp.sel2 <- c('ACBA', 'ACPS', 'ACTE', 'FRMA', 'PIKO', 'TIAM')
+## other tree species
+snowdat.ag_adult.t <- subset(snowdat.ag_adult, growth.form == 'tree')
+snowdat.ag_adult.t1 <- snowdat.ag_adult.t[!(snowdat.ag_adult.t$sp. %in% sp.snow.surv.sel2),]
+summary(snowdat.ag_adult.t1)
+
+mod.snow.resttree.surv <- glmer(cbind(survs, deaths) ~ site + treatment*season + 
+                                   A.con_curt + A.het_curt+
+                                   (1|quad.unique) + (1|census) + (1|sp.),
+                                 data=snowdat.ag_adult.t1, family=binomial, 
+                                 control=glmerControl(optimizer="optimx", 
+                                                      optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.snow.resttree.surv.diags <- augment(mod.snow.resttree.surv)
+qplot(data=mod.snow.resttree.surv.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data=mod.snow.resttree.surv.diags, x=treatment, y=.wtres, geom="boxplot") 
+## plot fixed and random effects
+sjp.lmer(mod.snow.resttree.surv, type='fe', p.kr = FALSE)
+sjp.lmer(mod.snow.resttree.surv, type='re', sort.est="sort.all", p.kr = FALSE)
+qqPlot(resid(mod.snow.resttree.surv))
+summary(mod.snow.resttree.surv, correlation=FALSE)
+
+```
+
+
+### Recruitment analysis
+```{r snowrecruitment}
+###-------------------- recruitment annlysis -----------------------------###
+snow.rect.ag_adult <- read.csv("data/snow.rect.ag_adult.csv")
+
+snow.rect.ag_adult$site <- factor(snow.rect.ag_adult$site) 
+contrasts(snow.rect.ag_adult$site) <- "contr.sum"
+
+## Trees
+snow.t.rect_adult <- snow.rect.ag_adult[snow.rect.ag_adult$growth.form == 'tree',]
+mod.snow.recr1 <- glmer(recruits ~ site + treatment*census + A.con_curt + A.het_curt +
+                          (1|quad.unique) + (1|sp.),
+                        data=snow.t.rect_adult, family=poisson, 
+                        control=glmerControl(optimizer="optimx", 
+                                             optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+mod.snow.recr2 <- glmer(recruits ~ site + treatment + A.con_curt + A.het_curt +
+                          (1|quad.unique) + (1|sp.),
+                        data=snow.t.rect_adult, family=poisson, 
+                        control=glmerControl(optimizer="optimx", 
+                                             optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+anova(mod.snow.recr1, mod.snow.recr2)
+
+sjp.lmer(mod.snow.recr1, type='re', sort.est="sort.all" )
+
+
+## Random effects ofABNE, FRMA and TIAM go extramely, try to put group them against other species as the fixed effect
+snow.t.rect_adult$sp.group <- ifelse(snow.t.rect_adult$sp.=='ABNE' | 
+                                       snow.t.rect_adult$sp.=='FRMA' | snow.t.rect_adult$sp.=='TIAM', 1, 0)
+snow.t.rect_adult$sp.group <- as.factor(snow.t.rect_adult$sp.group) 
+
+mod.snow.recr3 <- glmer(recruits ~ site + treatment*census + 
+                          A.con_curt + A.het_curt + sp.group +
+                          (1|quad.unique) + (1|sp.),
+                        data=snow.t.rect_adult, family=poisson, 
+                        control=glmerControl(optimizer="optimx", 
+                                             optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+anova(mod.snow.recr1, mod.snow.recr2, mod.snow.recr3)
+
+mod.snow.recr.diags <- augment(mod.snow.recr1)
+qplot(data=mod.snow.recr.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.snow.recr.diags, x=treatment, y=.wtres, geom="boxplot") 
+
+sjp.lmer(mod.snow.recr3, type='fe')
+sjp.lmer(mod.snow.recr3, type='re', sort.est="sort.all" )
+qqPlot(resid(mod.snow.recr3))
+summary(mod.snow.recr3, correlation=FALSE)
+
+
+
+###---------------- individual species analysis ----------------------------###
+## reps (lets say 10) and variation in abundance (at least >5 
+sp.snowrect.counts <- summarise(group_by(snow.t.rect_adult, sp.), 
+                                n.quadrat=length(recruits), max.rect=max(recruits), min.rect=min(recruits))
+
+sp.snowrect.counts$range <- sp.snowrect.counts$max.rect - sp.snowrect.counts$min.rect
+sp.snowrect.sel <- sp.snowrect.counts$sp.[sp.snowrect.counts$n.quadrat > 10 & sp.snowrect.counts$range >5]
+sp.snowrect.counts[sp.snowrect.counts$sp. %in% sp.snowrect.sel,]
+
+sp.snowrect.sel2 <- c('ACPS','FRMA','TIAM')
+
+snowrectmods <- sapply(sp.snowrect.sel2, function(sp){
+  print(sp)
+  spdat <- filter(snow.t.rect_adult, sp. == sp)
+  spdat <- droplevels(spdat)
+  mod <- glmer(recruits ~ site + treatment*census +
+                 A.con_curt + A.het_curt + (1|quad.unique), 
+               data=spdat, family=poisson, 
+               control=glmerControl(optimizer="optimx",
+                                    optCtrl=list(method=c('bobyqa', 'Nelder-Mead')))
+  )
+}, simplify=FALSE)
+
+## diagnostic plots
+indmods.snowrect.resids <- lapply(snowrectmods, augment) 
+
+indmods.snowrect.resids <- do.call('rbind', mapply(function(spnm, dat) {
+  dat$species <- spnm
+  return(dat)
+}, spnm=as.list(names(indmods.snowrect.resids)), dat=indmods.snowrect.resids, 
+SIMPLIFY=FALSE))
+
+ggplot(data=indmods.snowrect.resids, aes(x=.fitted, y=.wtres, colour=treatment)) +
+  geom_jitter() + geom_smooth() + facet_wrap(~species, scales='free') +
+  geom_hline(yintercept=0, linetype='dashed')
+
+lapply(snowrectmods, function(mod){
+  dotplot(ranef(mod, condVar=TRUE))})
+
+lapply(snowrectmods, function(x) summary(x, correlation=FALSE))
+lapply(snowrectmods, function(x) anova(x))
+
+
+###----------------- Pooling other species -------------------------###
+
+snow.t.rect.other_adult <- snow.t.rect_adult[!(snow.t.rect_adult$sp. %in% sp.snowrect.sel2),]
+summary(snow.t.rect.other_adult)
+
+mod.snow.recr.other <- glmer(recruits ~ site + treatment*census + A.con_curt + A.het_curt +
+                                (1|quad.unique) + (1|sp.),
+                              data=snow.t.rect.other_adult, family=poisson, 
+                              control=glmerControl(optimizer="optimx", 
+                                                   optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+
+mod.snow.recr.other.diags <- augment(mod.snow.recr.other)
+qplot(data=mod.snow.recr.other.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.snow.recr.other.diags, x=treatment, y=.wtres, geom="boxplot") 
+
+qqPlot(resid(mod.snow.recr.other))
+sjp.lmer(mod.snow.recr.other, type='fe')
+sjp.lmer(mod.snow.recr.other, type='re', sort.est="sort.all" )
+summary(mod.snow.recr.other, correlation=FALSE)
+
+```
+
+
+### Growth analysis
+```{r snowgwothanalysis}
+###----------------------- Growth models ------------------------------###
+snowdat.g_adult <- read.csv("data/snowdat.g_adult.csv")
+snowdat.g_adult$site <- factor(snowdat.g_adult$site)
+contrasts(snowdat.g_adult$site) <- "contr.sum"
+
+#### duration
+## duration is presented as months from the beginning of the experiment
+snowdat.g_adult$duration <- ifelse(snowdat.g_adult$census=="15sp", 9,
+                                   ifelse(snowdat.g_adult$census=="15fa", 12,
+                                          ifelse(snowdat.g_adult$census=="16sp", 21,
+                                                 ifelse(snowdat.g_adult$census=="16fa", 24,
+                                                        ifelse(snowdat.g_adult$census=="17sp", 32,
+                                                               ifelse(snowdat.g_adult$census=="17fa", 35, NA))))))
+## season
+snowdat.g_adult$season <- ifelse(snowdat.g_adult$census=='15fa'| 
+                                   snowdat.g_adult$census=='16fa'|
+                                   snowdat.g_adult$census=='17fa', 'fa', 'sp')
+
+summary(snowdat.g_adult)
+
+
+## tree
+mod.snow.tree.grow1 <- lmer(grow.snd ~ site + treatment + A.con_curt + A.het_curt +
+                              (1|quad.unique) + (1|census) + (1|sp.), 
+                            data=subset(snowdat.g_adult, growth.form == 'tree'))
+
+mod.snow.tree.grow2 <- lmer(grow.snd ~ site + treatment*duration+
+                              (1|quad.unique) + (1|sp.), 
+                            data=subset(snowdat.g_adult, growth.form == 'tree'))
+
+mod.snow.tree.grow3 <- lmer(grow.snd ~ site + treatment*season+
+                              (1|quad.unique) + (1|sp.) + (1|census), 
+                            data=subset(snowdat.g_adult, growth.form == 'tree'))
+
+anova(mod.snow.tree.grow1, mod.snow.tree.grow2, mod.snow.tree.grow3)
+
+mod.snow.tree.grow.diags <- augment(mod.snow.tree.grow1)
+qplot(data=mod.snow.tree.grow.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.snow.tree.grow.diags, x=treatment, y=.wtres, geom="boxplot") 
+qqPlot(resid(mod.snow.tree.grow1))
+summary(mod.snow.tree.grow1, correlation=FALSE)
+
+
+# although treating site as a fixed effect make the model performing better, results do not change 
+# duration has no effect on seedling growth, there is no need to consider it in the following analyses.
+
+
+## shrub
+mod.snow.shrub.grow1 <- lmer(grow.snd ~ site + treatment + A.sum_curt+
+                               (1|quad.unique) + (1|census) + (1|sp.), 
+                             data=subset(snowdat.g_adult, growth.form == 'shrub'))
+mod.snow.shrub.grow2 <- lmer(grow.snd ~ site + treatment + 
+                               (1|quad.unique) + (1|census) + (1|sp.), 
+                             data=subset(snowdat.g_adult, growth.form == 'shrub'))
+mod.snow.shrub.grow3 <- lmer(grow.snd ~ treatment*season + 
+                               (1|quad.unique) + (1|census) + (1|sp.), 
+                             data=subset(snowdat.g_adult, growth.form == 'shrub'))
+
+anova(mod.snow.shrub.grow1, mod.snow.shrub.grow2, mod.snow.shrub.grow3)
+
+mod.snow.shrub.grow.diags <- augment(mod.snow.shrub.grow1)
+qplot(data=mod.snow.shrub.grow.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.snow.shrub.grow.diags, x=treatment, y=.wtres, geom="boxplot") 
+qqPlot(resid(mod.snow.shrub.grow1))
+summary(mod.snow.shrub.grow1, correlation=FALSE)
+
+
+
+##------------------------- individual species -------------------------------##
+## And now pulling the species apart. 
+## First need to filter down to species that can be analysed - need enough
+## reps (lets say 50) and variation in abundance (at least >10 
+sp.snowgrow.counts <- summarise(group_by(snowdat.g_adult, sp.), 
+                                n.indiv=length(grow.snd), n.quadrat=length(unique(grow.snd)))
+
+sp.snowgrow.sel <- sp.snowgrow.counts$sp.[sp.snowgrow.counts$n.indiv > 50 & sp.snowgrow.counts$n.quadrat > 10]
+sp.snowgrow.counts[sp.snowgrow.counts$sp. %in% sp.snowgrow.sel,]
+
+sp.snowgrow.sel2 <- c('ACPS','DEGL','EUAL','EUMA', 'EUVE','FRMA','PHSC','TIAM')
+
+snowgrowmods <- sapply(sp.snowgrow.sel2, function(sp){
+  print(sp)
+  spdat <- filter(snowdat.g_adult, sp. == sp)
+  spdat <- droplevels(spdat)
+  mod <- lmer(grow.snd ~ site+ treatment + A.sum_curt + (1|quad.unique) + (1|census), 
+              data=spdat)
+}, simplify=FALSE)
+
+## diagnostic plots
+indmods.snowgrow.resids <- lapply(snowgrowmods, augment) 
+
+indmods.snowgrow.resids <- do.call('rbind', mapply(function(spnm, dat) {
+  dat$species <- spnm
+  return(dat)
+}, spnm=as.list(names(indmods.snowgrow.resids)), dat=indmods.snowgrow.resids, 
+SIMPLIFY=FALSE))
+
+ggplot(data=indmods.snowgrow.resids, aes(x=.fitted, y=.wtres, colour=treatment)) +
+  geom_jitter() + geom_smooth() + facet_wrap(~species, scales='free') +
+  geom_hline(yintercept=0, linetype='dashed')
+
+library(lattice)
+lapply(snowgrowmods, function(mod){
+  dotplot(ranef(mod, condVar=TRUE))})
+
+lapply(snowgrowmods, function(x) summary(x, correlation=FALSE))
+lapply(snowgrowmods, function(x) anova(x))
+
+
+##------------------------ Other species ------------------------##
+snowdat.g.other_adult <- snowdat.g_adult[!(snowdat.g_adult$sp. %in% sp.snowgrow.sel2),]
+mod.snow.other.grow <- lmer(grow.snd ~ site + treatment+  A.sum_curt +
+                               (1|quad.unique) + (1|census)+ (1|sp.), data=snowdat.g.other_adult)
+
+mod.snow.other.grow.diags <- augment(mod.snow.other.grow)
+qplot(data=mod.snow.other.grow.diags, x=.fitted, y=.resid, geom=c('point', 'smooth')) +
+  geom_hline(yintercept=0, linetype='dotted')
+qplot(data = mod.snow.other.grow.diags, x=treatment, y=.wtres, geom="boxplot") 
+qqPlot(resid(mod.snow.other.grow))
+summary(mod.snow.other.grow, correlation=FALSE)
+
+```
+Snow removal did not affect the seedling growth.
+
+
+
+### Diversity analysis
+
+```{r snowdiversityanalysis}
+
+library(vegan)
+divers_woodsnow <- summarise(
+group_by(snowdat.ag_adult, site, quadrat, quad.unique, treatment, census), 
+shannon=diversity(survs), simpson=diversity(survs, index='invsimpson'), species=specnumber(survs))
+
+adult.ngbr.inf <- read.csv("data/adult.ngbr.inf.csv")
+divers_woodsnow$A.sum <- adult.ngbr.inf$A.sum[match(divers_woodsnow$quad.unique, adult.ngbr.inf$quad.unique)]
+summary(divers_woodsnow)
+divers_woodsnow$A.sum_curt <- divers_woodsnow$A.sum^(1/3)
+
+
+# season
+divers_woodsnow$season <- ifelse(divers_woodsnow$census=='15fa'| 
+                                   divers_woodsnow$census=='16fa'|
+                                   divers_woodsnow$census=='17fa', 'fa', 'sp')
+summary(divers_woodsnow)
+
+ggplot(divers_woodsnow, aes(x=treatment, y=shannon)) +  geom_boxplot()
+
+summarise(group_by(divers_woodsnow, treatment, census), meanH=mean(shannon), 
+seH=sd(shannon)/sqrt(length(shannon))) %>%
+ggplot(aes(x=treatment, y=meanH, ymin=meanH-seH, ymax=meanH+seH, colour=census)) +
+geom_point(position=position_dodge(width = .5))+
+geom_errorbar(position=position_dodge(width = .5), width = 0.2) + 
+coord_trans(y="exp") + 
+labs(x="Snow removal", y="Effective number of species") 
+
+
+###-------------------- Overall ---------------------------###
+# shannon diversity
+mod.wsnow.shan1 <- lmer(shannon ~ site + treatment + (1|quad.unique) + (1|census), 
+                           data=divers_woodsnow)
+mod.wsnow.shan2 <- lmer(shannon ~ site +treatment +A.sum_curt +(1|quad.unique)+ (1|census), 
+                           data=divers_woodsnow)
+mod.wsnow.shan3 <- lmer(shannon ~ treatment*season + (1|quad.unique) + (1|census),
+                           data=divers_woodsnow)
+
+anova(mod.wsnow.shan1, mod.wsnow.shan2, mod.wsnow.shan3)
+
+plot(mod.wsnow.shan3, type=c('p', 'smooth'))
+qqPlot(resid(mod.wsnow.shan3))
+
+sjp.lmer(mod.wsnow.shan3, type='fe')
+sjp.lmer(mod.wsnow.shan3, type='re', sort.est="sort.all" )
+summary(mod.wsnow.shan3, correlation=FALSE)
+
+
+##----------------------- More diversity indices -------------------------##
+
+### Invsimpson
+range(divers_woodsnow$simpson)
+divers_woodsnow1 <- subset(divers_woodsnow, simpson != Inf)
+
+mod.wsnow.simp <- lmer(simpson ~ site + treatment*season + (1|quad.unique)+(1|census),
+                        data=divers_woodsnow1)
+
+plot(mod.wsnow.simp, type=c('p', 'smooth'))
+sjp.lmer(mod.wsnow.simp, type='fe')
+sjp.lmer(mod.wsnow.simp, type='re', sort.est="sort.all" )
+qqPlot(resid(mod.wsnow.simp))
+
+summary(mod.wsnow.simp, correlation=FALSE)
+
+
+### Pielou's evenness (J)
+table(divers_woodsnow$species)
+divers_woodsnow2 <- subset(divers_woodsnow, species > 1)
+# 20% of the data don't meet the criteria
+divers_woodsnow2$evenness <- divers_woodsnow2$shannon/log(divers_woodsnow2$species)
+mod.wsnow.even <- lmer(evenness ~ site + treatment*season + (1|quad.unique) + (1|census),
+                            data=divers_woodsnow2)
+
+plot(mod.wsnow.even, type=c('p', 'smooth'))
+
+sjp.lmer(mod.wsnow.even, type='fe')
+sjp.lmer(mod.wsnow.even, type='re', sort.est="sort.all" )
+qqPlot(resid(mod.wsnow.even))
+summary(mod.wsnow.even, correlation=FALSE)
+
+
+###-------------------- Trees, shrubs -------------------------###
+divers_snow_gf <- summarise(
+  group_by(snowdat.ag_adult, site, quadrat, quad.unique, growth.form, treatment, census), 
+  shannon=diversity(survs), simpson=diversity(survs, index='invsimpson'), species=specnumber(survs))
+
+divers_snow_gf$A.sum <- adult.ngbr.inf$A.sum[match(divers_snow_gf$quad.unique, adult.ngbr.inf$quad.unique)]
+divers_snow_gf$A.sum_curt <- divers_snow_gf$A.sum^(1/3)
+summary(divers_snow_gf)
+
+divers_snow_gf$season <- ifelse(divers_snow_gf$census=='15fa'| 
+                                  divers_snow_gf$census=='16fa'|
+                                  divers_snow_gf$census=='17fa', 'fa', 'sp')
+
+summary(divers_snow_gf)
+
+### Trees
+# shannon diversity
+mod.treesnow.shan <- lmer(shannon ~ site + treatment*season + (1|quad.unique) + (1|census),
+                              data=subset(divers_snow_gf, growth.form=='tree'))
+
+plot(mod.treesnow.shan, type=c('p', 'smooth'))
+qqPlot(resid(mod.treesnow.shan))
+sjp.lmer(mod.treesnow.shan, type='fe')
+sjp.lmer(mod.treesnow.shan, type='re', sort.est="sort.all" )
+
+summary(mod.treesnow.shan, correlation=FALSE)
+
+
+## Invsimpson
+divers_snow_gf1 <- subset(divers_snow_gf, simpson != Inf)
+mod.treesnow.simp <- lmer(simpson ~ site + treatment*season + (1|quad.unique) + (1|census), 
+                              data=subset(divers_snow_gf1, growth.form=='tree'))
+
+plot(mod.treesnow.simp, type=c('p', 'smooth'))
+qqPlot(resid(mod.treesnow.simp))
+sjp.lmer(mod.treesnow.simp, type='fe')
+sjp.lmer(mod.treesnow.simp, type='re', sort.est="sort.all" )
+
+summary(mod.treesnow.simp, correlation=FALSE)
+
+
+### Shrubs
+# shannon diversity
+mod.shrubsnow.shan <- lmer(shannon ~ site + treatment*season + (1|quad.unique) + (1|census),
+                               data=subset(divers_snow_gf, growth.form=='shrub'))
+
+plot(mod.shrubsnow.shan, type=c('p', 'smooth'))
+qqPlot(resid(mod.shrubsnow.shan))
+sjp.lmer(mod.shrubsnow.shan, type='fe')
+sjp.lmer(mod.shrubsnow.shan, type='re', sort.est="sort.all" )
+summary(mod.shrubsnow.shan, correlation=FALSE)
+
+
+## Invsimpson
+mod.shrubsnow.simp <- lmer(simpson ~ site + treatment*season + (1|quad.unique) + (1|census), 
+                               data=subset(divers_snow_gf1, growth.form=='shrub'))
+
+plot(mod.shrubsnow.simp, type=c('p', 'smooth'))
+qqPlot(resid(mod.shrubsnow.simp))
+sjp.lmer(mod.shrubsnow.simp, type='fe')
+sjp.lmer(mod.shrubsnow.simp, type='re', sort.est="sort.all" )
+summary(mod.shrubsnow.simp, correlation=FALSE)
+
+
+```
+
