@@ -394,14 +394,14 @@ colour="Pesticide",linetype="Pesticide", fill="Pesticide")
 ## The observed points look really messy, we need to make the figure clearer
 ## bin the x to 250 density
 range(ob.surv.newdat$x)
-ob.surv.newdat$A.con_cat <- cut(ob.surv.newdat$x, seq(0, 3000, 250))
+ob.surv.newdat$A.con_cat <- cut(ob.surv.newdat$x, seq(0, 3000, 300))
 
 obse.surv_cat <- summarise(group_by(ob.surv.newdat, A.con_cat, pesticide), 
 mean = mean(obse), se=sd(obse)/sqrt(length(obse)))
 summary(obse.surv_cat)
 
 # change the A.con_cat to continuous data
-obse.surv_cat$x <- rep(seq(125,2875,250), each=3)
+obse.surv_cat$x <- rep(seq(150,2850,300), each=3)
 
 
 p.ob.pr.surv <- ggplot() +
