@@ -31,19 +31,20 @@ library(glmmTMB)
 ### Data and models
 ```{r data and models}
 ## read data
-dat <- read.csv("data/pest_new.dat20.csv")
-str(dat)
+pest.survdat0 <- read.csv("data/pest_new.dat20.csv")
+str(pest.survdat0)
 
-dat$pesticide <- factor(dat$pesticide, levels=c('W', 'F', 'I'))
-dat$census <- factor(dat$census, levels=c('15fa', '16sp', '16fa', '17sp', '17fa'))
-dat$exclosure <- factor(dat$exclosure)
-dat$site <- factor(dat$site)
-dat$quad.unique <- factor(dat$quad.unique)
+pest.survdat0$pesticide <- factor(pest.survdat0$pesticide, levels=c('W', 'F', 'I'))
+pest.survdat0$census <- factor(pest.survdat0$census, levels=c('15fa', '16sp', '16fa', '17sp', '17fa'))
+pest.survdat0$exclosure <- factor(pest.survdat0$exclosure)
+pest.survdat0$site <- factor(pest.survdat0$site)
+pest.survdat0$quad.unique <- factor(pest.survdat0$quad.unique)
 
 
 
 # the survival analyses only consider tree species and the survival of seedlings from spring to fall
-pest.surv.dat <- subset(dat, growth.form=='tree' & (census=='15fa'|census=='16fa'|census=='17fa'))
+pest.surv.dat <- subset(pest.survdat0, 
+                        growth.form=='tree' & (census=='15fa'|census=='16fa'|census=='17fa'))
 pest.surv.dat <- pest.surv.dat[,-c(1,6:9,17,22:24,26:32)]
 summary(pest.surv.dat)
 
@@ -52,7 +53,7 @@ summary(pest.surv.dat)
 
 ### all seedlings were pooled
 ## previous analyses had shown that there was no significant interaction effect 
-## between exclosure and other variables, so did the seedling density
+## between exclosure and other variables
 mod.surv1 <- glmer(surv1 ~ lg_height0 + pesticide*lg_A.con + exclosure + lg_A.het + lg_S.con + lg_S.het + 
 	 census + site +(1+census|quad.unique) + (1|sp.), data=pest.surv.dat, family=binomial)
 
@@ -175,6 +176,7 @@ surv.jvalues1 <- with(pest.surv.dat1, seq(from = min(lg_A.con), to = max(lg_A.co
 # meet an error
 
 ```
+
 I suppose the issue above may due to the random-slope effect, this can be solved vai using re.form=~0 in the prediction. However, I should consider the random-effect in the predition because I noticed that the one without considering random-effect performs poorly in the recruitment (please check this in the recruitment analysis).
 
 

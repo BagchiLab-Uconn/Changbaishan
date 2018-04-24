@@ -1,0 +1,285 @@
+---
+title: "CBS Pest Recruitment Analysis"
+author: "Shihong Jia"
+date: "Apr 23, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Analysis 2: Recruitment analysis
+The presentation of the relationship between conspecific adult density and seedling survival under three pesticide treatments (i.e. fungicide, insecticide and control). Both prediction and the confidence intervals and the observed values will be shown in one graph.
+
+
+### Load packages
+```{r loadlibs, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(cowplot)
+library(lme4)
+library(pbkrtest)
+library(tidyr)
+library(dplyr)
+library(optimx)
+library(broom)
+library(glmmTMB)
+```
+
+
+
+### Data and models
+```{r data and models}
+## read data
+pest.recr.dat0 <- read.csv("data/pest.recr.dat.csv")
+
+
+pest.recr.dat0$pesticide <- factor(pest.recr.dat0$pesticide, levels=c('W', 'F', 'I'))
+pest.recr.dat0$census <- factor(pest.recr.dat0$census, levels=c('16sp', '17sp'))
+pest.recr.dat0$exclosure <- factor(pest.recr.dat0$exclosure)
+pest.recr.dat0$site <- factor(pest.recr.dat0$site)
+pest.recr.dat0$quad.unique <- factor(pest.recr.dat0$quad.unique)
+
+pest.recr.dat <- pest.recr.dat0[, -c(1,11:13,15)]
+
+str(pest.recr.dat)
+
+
+
+##---------------- model -----------------##
+
+### all seedlings were pooled
+## previous analyses had shown that there was no significant interaction effect 
+## between exclosure and other variables
+mod.recr1 <- glmer(recruits ~ pesticide*(lg_A.con + lg_A.het) + exclosure +  census + site  +
+                     (1+census|quad.unique) + (1|sp.),data=pest.recr.dat, family=poisson)
+
+
+# not consider exclosure in the further analyses
+mod.recr2 <- glmer(recruits ~ pesticide*(lg_A.con + lg_A.het) + census + site  +
+                     (1+census|quad.unique) + (1|sp.),data=pest.recr.dat, family=poisson)
+
+# do not consider census as the random-slope effect
+mod.recr3 <- glmer(recruits ~ pesticide*(lg_A.con + lg_A.het) + census + site  +
+                     (1|quad.unique) + (1|sp.),data=pest.recr.dat, family=poisson)
+
+# do not include census and site as fixed effects, and not consider census as a random-slope effect
+mod.recr4 <- glmer(recruits ~ pesticide*(lg_A.con + lg_A.het) + 
+                     (1|quad.unique) + (1|sp.),data=pest.recr.dat, family=poisson)
+
+
+anova(mod.recr1, mod.recr2, mod.recr3, mod.recr4)
+
+# present the best model
+summary(mod.recr2, correlation=FALSE)
+
+# how about mod.recr4?
+summary(mod.recr4, correlation=FALSE)
+
+```
+
+
+### Prediction1
+The experience in the survival analysis told me I should try the mod.recr4 (i.e. without considering census and site as fixed effects and census as a random-slope effect). Also, I would like to predict without considering random effects.
+```{r recruitmentprediction}
+# First, I need to remove some potential outliers
+pest.recr.dat1 <- subset(pest.recr.dat, A.con < 3000)
+dim(pest.recr.dat1); dim(pest.recr.dat)
+
+
+# re-fit the model
+mod.recr4_rf <- glmer(recruits ~ pesticide*(lg_A.con + lg_A.het) + 
+                     (1|quad.unique) + (1|sp.),data=pest.recr.dat1, family=poisson)
+
+summary(mod.recr4_rf, correlation=FALSE)
+
+
+
+## prediction
+
+# temporary data 
+recr.tmpdat <- pest.recr.dat1[, c("pesticide", "lg_A.con", "lg_A.het", "quad.unique", "sp.")]
+dim(recr.tmpdat)
+
+
+recr.jvalues <- with(pest.recr.dat1, seq(from = min(lg_A.con), to = max(lg_A.con), length.out = 100))
+
+
+
+
+# First, I will show you the results without considering the random effects
+# calculate predicted recruits and store in a list 
+
+recr.biprobs_norand <- lapply(levels(pest.recr.dat1$pesticide), function(treat) 
+	{recr.tmpdat$pesticide[] <- treat 
+	lapply(recr.jvalues, function(j) {
+	recr.tmpdat$lg_A.con <- j 
+	predict(mod.recr4_rf, newdata = recr.tmpdat, re.form=~0, type = "response") 
+  }) 
+})
+
+# get means and quartiles for all jvalues for each level of Pesticide 
+recr.plotdat_norand <- lapply(recr.biprobs_norand, function(X) {
+	 recr.temp <- t(sapply(X, function(x) {
+	 c(M=mean(x), quantile(x, c(.25, .75))) 
+	}))
+	recr.temp <- as.data.frame(cbind(recr.temp, recr.jvalues))
+	colnames(recr.temp) <- c("Predicted", "Lower", "Upper", "Lg_A.con") 
+	return(recr.temp)
+})
+
+
+# collapse to one data frame 
+recr.plotdat_norand <- do.call(rbind, recr.plotdat_norand) 
+
+# add pesticide treatment
+recr.plotdat_norand$pesticide <- factor(rep(levels(pest.recr.dat1$pesticide), 
+					each = length(recr.jvalues)))
+
+
+# back to the original data of x
+recr_mean_logx <- mean(log(pest.recr.dat1$A.con + 1))
+recr_sd_logx <- sd(log(pest.recr.dat1$A.con + 1))
+recr.plotdat_norand$x <- exp((recr.plotdat_norand$Lg_A.con*recr_sd_logx) + recr_mean_logx)-1
+
+
+# re-level the pesticide treatment
+recr.plotdat_norand$pesticide <- factor(recr.plotdat_norand$pesticide, levels=c("W","F","I"))
+summary(recr.plotdat_norand)
+
+
+
+## ------------------ the observed values -----------------##
+## generate k sets of simulated y at these new points.
+ob.recr.newdat <- with(pest.recr.dat1, expand.grid(lg_A.con=lg_A.con, pesticide=levels(pesticide), 
+		lg_A.het=mean(lg_A.het)))
+
+dim(ob.recr.newdat)
+
+
+ob.recr.newdat$pred <- predict(mod.recr4_rf, newdata=ob.recr.newdat, re.form=~0, type='link')
+pest.recr.dat1$resd <- resid(mod.recr4_rf)
+
+
+# select the lg_A.con in the original data
+ob.recr.newdat$resd <- pest.recr.dat1[pest.recr.dat1$lg_A.con %in% ob.recr.newdat$lg_A.con,]$resd
+
+
+ob.recr.newdat$obse_lk <- ob.recr.newdat$pred + ob.recr.newdat$resd
+ob.recr.newdat$obse <- exp(ob.recr.newdat$obse_lk)
+summary(ob.recr.newdat)
+
+
+# replace the pesticide
+ob.recr.newdat$pesticide <- pest.recr.dat1[pest.recr.dat1$lg_A.con %in% ob.recr.newdat$lg_A.con,]$pesticide
+
+
+# back to the original data of x
+ob.recr.newdat$x <- exp((ob.recr.newdat$lg_A.con*recr_sd_logx) + recr_mean_logx)-1
+summary(ob.recr.newdat); dim(ob.recr.newdat)
+
+
+
+## bin the x to 300 density
+ob.recr.newdat$A.con_cat <- cut(ob.recr.newdat$x, seq(-1, 2999, 300))
+
+obse.recr_cat <- summarise(group_by(ob.recr.newdat, A.con_cat, pesticide), 
+			mean = mean(obse), se=sd(obse)/sqrt(length(obse)))
+
+# change the A.con_cat to continuous data
+obse.recr_cat$x <- rep(seq(150,2850,300), each=3)
+
+summary(obse.recr_cat)
+
+
+# plot
+ggplot() +
+  geom_line(data=recr.plotdat_norand, aes(x=x, y=Predicted, colour=pesticide),size=0.8) +
+  geom_ribbon(data=recr.plotdat_norand, aes(x=x, ymin = Lower, ymax = Upper, fill = pesticide), 
+              alpha = 0.2) +
+  geom_point(data=obse.recr_cat,aes(x=x, y = mean, color=pesticide),
+		size=2,position=position_dodge(width = 115)) +
+  geom_errorbar(data=obse.recr_cat,aes(x=x, ymin=mean-se, ymax=mean+se,color=pesticide),
+		width=0.1, position=position_dodge(width = 115)) +
+  scale_color_manual(values = c('gray40','orangered','limegreen'),
+	labels=c("Control","Fungicide","Insecticide")) + 
+  scale_fill_manual(values = c('gray40','orangered','limegreen'),
+	labels=c("Control","Fungicide","Insecticide")) +
+  labs(x="Conspecific adult density (m2)", y="Recruitment", 
+  colour="Pesticide",linetype="Pesticide", fill="Pesticide") +
+  theme(legend.title=element_blank(), legend.background = element_rect(fill="lightgray"),
+		legend.position ="right") + theme_bw()
+
+
+```
+
+The prediction are really underestimated compared with the observed values.
+
+
+
+## Prediction2
+```{r prediction with random effects}
+
+recr.biprobs <- lapply(levels(pest.recr.dat1$pesticide), function(treat) 
+	{recr.tmpdat$pesticide[] <- treat 
+	lapply(recr.jvalues, function(j) {
+	recr.tmpdat$lg_A.con <- j 
+	# with random effects
+	# predict(mod.recr4_rf, newdata = recr.tmpdat, re.form=~0, type = "response") 
+	predict(mod.recr4_rf, newdata = recr.tmpdat, type = "response") 
+  }) 
+})
+
+# get means and quartiles for all jvalues for each level of Pesticide 
+recr.plotdat <- lapply(recr.biprobs, function(X) {
+	 recr.temp <- t(sapply(X, function(x) {
+	 c(M=mean(x), quantile(x, c(.25, .75))) 
+	}))
+	recr.temp <- as.data.frame(cbind(recr.temp, recr.jvalues))
+	colnames(recr.temp) <- c("Predicted", "Lower", "Upper", "Lg_A.con") 
+	return(recr.temp)
+})
+
+
+# collapse to one data frame 
+recr.plotdat <- do.call(rbind, recr.plotdat) 
+
+# add pesticide treatment
+recr.plotdat$pesticide <- factor(rep(levels(pest.recr.dat1$pesticide), 
+					each = length(recr.jvalues)))
+
+
+# back to the original data of x
+recr.plotdat$x <- exp((recr.plotdat$Lg_A.con*recr_sd_logx) + recr_mean_logx)-1
+
+
+# re-level the pesticide treatment
+recr.plotdat$pesticide <- factor(recr.plotdat$pesticide, levels=c("W","F","I"))
+summary(recr.plotdat)
+
+
+# plot with observed values
+ggplot() +
+  geom_line(data=recr.plotdat, aes(x=x, y=Predicted, colour=pesticide),size=0.8) +
+  geom_ribbon(data=recr.plotdat, aes(x=x, ymin = Lower, ymax = Upper, fill = pesticide), 
+              alpha = 0.2) +
+  geom_point(data=obse.recr_cat,aes(x=x, y = mean, color=pesticide),
+		size=2,position=position_dodge(width = 115)) +
+  geom_errorbar(data=obse.recr_cat,aes(x=x, ymin=mean-se, ymax=mean+se,color=pesticide),
+		width=0.1, position=position_dodge(width = 115)) +
+  scale_color_manual(values = c('gray40','orangered','limegreen'),
+	labels=c("Control","Fungicide","Insecticide")) + 
+  scale_fill_manual(values = c('gray40','orangered','limegreen'),
+	labels=c("Control","Fungicide","Insecticide")) +
+  labs(x="Conspecific adult density (m2)", y="Recruitment", 
+  colour="Pesticide",linetype="Pesticide", fill="Pesticide") +
+  theme(legend.title=element_blank(), legend.background = element_rect(fill="lightgray"),
+		legend.position ="right") + theme_bw()
+
+
+```
+
+It is better to predict with random effects.
+
+
