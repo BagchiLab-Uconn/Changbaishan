@@ -1,0 +1,687 @@
+---
+title: "NewPestAnalysis"
+author: "Shihong Jia"
+date: "June 2, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Analysis 1: Survival analysis
+The presentation of the relationship between conspecific adult density and seedling survival under three pesticide treatments (i.e. fungicide, insecticide and control). Both prediction and the confidence intervals and the observed values will be shown in one graph.
+
+
+### Load packages
+```{r loadlibs, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(cowplot)
+library(lme4)
+library(pbkrtest)
+library(tidyr)
+library(dplyr)
+library(optimx)
+library(broom)
+library(glmmTMB)
+```
+
+
+
+### Data and models
+```{r data and models}
+## read data
+pest.survdat0 <- read.csv("data/pest_new.dat20.csv")
+str(pest.survdat0)
+
+pest.survdat0$pesticide <- factor(pest.survdat0$pesticide, levels=c('W', 'F', 'I'))
+pest.survdat0$census <- factor(pest.survdat0$census, levels=c('15fa', '16sp', '16fa', '17sp', '17fa'))
+pest.survdat0$exclosure <- factor(pest.survdat0$exclosure)
+pest.survdat0$site <- factor(pest.survdat0$site)
+pest.survdat0$quad.unique <- factor(pest.survdat0$quad.unique)
+
+
+
+# the survival analyses only consider tree species and the survival of seedlings from spring to fall
+pest.surv.dat <- subset(pest.survdat0, 
+                        growth.form=='tree' & (census=='15fa'|census=='16fa'|census=='17fa'))
+pest.surv.dat <- pest.surv.dat[,-c(1,6:9,17,22:24,26:32)]
+summary(pest.surv.dat)
+
+
+
+
+### all seedlings were pooled
+## previous analyses had shown that there was no significant interaction effect 
+## between exclosure and other variables
+mod.surv1 <- glmer(surv1 ~ lg_height0 + pesticide*lg_A.con + exclosure + lg_A.het + lg_S.con + lg_S.het + 
+	 census + site +(1+census|quad.unique) + (1|sp.), data=pest.surv.dat, family=binomial)
+
+## do not consider exclosure in the following analyses
+mod.surv2 <- glmer(surv1 ~ lg_height0 + pesticide*lg_A.con + lg_A.het + lg_S.con + lg_S.het + 
+	 census + site + (1+census|quad.unique) + (1|sp.), data=pest.surv.dat, family=binomial)
+
+# do not consider census as the random-slope effect
+mod.surv3 <- glmer(surv1 ~ lg_height0 + pesticide*lg_A.con + lg_A.het + lg_S.con + lg_S.het + 
+	 census + site +(1|quad.unique) + (1|sp.), data=pest.surv.dat, family=binomial)
+
+# do not include census and site as fixed effects, and not consider census as a random-slope effect
+mod.surv4 <- glmer(surv1 ~ lg_height0 + pesticide*lg_A.con + lg_A.het + lg_S.con + lg_S.het + 
+	 (1|quad.unique) + (1|sp.), data=pest.surv.dat, family=binomial)
+
+
+anova(mod.surv1, mod.surv2, mod.surv3, mod.surv4)
+
+summary(mod.surv2, correlation=FALSE)
+
+summary(mod.surv3, correlation=FALSE)
+
+# mod.surv2 is the best model according to the AIC values.
+# mod.tree.surv41.2 and mod.tree.surv41.3 show very similar results.
+# we do not consider exclosure in the further analysis.
+
+
+
+## glmmTMB model?
+modTMB.surv2 <- glmmTMB(surv1 ~ lg_height0 + pesticide*lg_A.con + lg_A.het + lg_S.con + lg_S.het + 
+                     census + site + (1+census|quad.unique) + (1|sp.), 
+                     data=pest.surv.dat, family=betabinomial)
+
+summary(modTMB.surv2, correlation=FALSE)
+
+
+# the glmmTMB shows similar results compared with glmer. I would like to use the glmer because it's easy for prediction.
+
+
+## glmer control
+mod.surv2_cotr <- glmer(surv1 ~ lg_height0 + pesticide*lg_A.con + lg_A.het + lg_S.con + lg_S.het + 
+	 census + site + (1+census|quad.unique) + (1|sp.), data=pest.surv.dat,
+	 family=binomial,control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+summary(mod.surv2_cotr, correlation=FALSE)
+
+
+## sum-to-zero contrasts for site and census
+pest.surv.dat$census <- factor(pest.surv.dat$census)
+pest.surv.dat$szsite <- pest.surv.dat$site
+contrasts(pest.surv.dat$szsite) <- contr.sum(3)
+pest.surv.dat$szcensus <- pest.surv.dat$census
+contrasts(pest.surv.dat$szcensus) <- contr.sum(3)
+
+mod.surv2_sz <- glmer(surv1 ~ lg_height0 + pesticide*lg_A.con + lg_A.het + lg_S.con + lg_S.het + 
+	 szsite + szcensus + (1+census|quad.unique) + (1|sp.), data=pest.surv.dat,
+	 family=binomial,control=glmerControl(optimizer="optimx", 
+                                        optCtrl=list(method=c('bobyqa', 'Nelder-Mead'))))
+summary(mod.surv2_sz, correlation=FALSE)
+
+
+
+```
+
+
+Although I see the argument of simplicity here, the critical factor is more whether or not the residuals from the binomial model are overdispersed - I think you said that they aren't (in which case, we don't need the beta-binomial model at all). However, I'd like to see that test here, which you can run with `r sum(resid(mod.surv2, type="pearson")^2)/df.residual(mod.surv2)` 
+
+#### Shihong response
+Running the code `r sum(resid(mod.surv2, type="pearson")^2)/df.residual(mod.surv2)`, the result is 0.8643 (< 1), which indicates none-overdispersed. 
+
+
+
+### Prediction1
+
+#### Robi comment
+I am a little concerned about the approach of filtering the data before fitting the model - especially because it doesn't look to me like removing the values of A.con > 3000 actually improves model fit (I'm still seeing warnings in your html output). Have you tried playing with alternative optimizers and increasing the number of iterations etc. 
+
+
+#### Shihong response
+Using alternative optimizers do not improve the model fit.See the result of 'mod.surv2_cotr'.
+
+```{r prediction1}
+## In the previous analysis, we found that there are some big outliers of A.con
+hist(pest.surv.dat$A.con)
+table(subset(pest.surv.dat, A.con > 3000)$pesticide)
+
+# there are 42 individuals which have the conspecific adult basal area larger than 3000 m2
+# there is no seedling in fungicide treatment.
+# in our prediction, we would like to see the relationship with the common X sclae.
+
+pest.surv.dat1 <- subset(pest.surv.dat, A.con < 3000)
+dim(pest.surv.dat1); 
+
+
+
+# re-fit the model
+mod.surv2_rf <- glmer(surv1 ~ lg_height0 + pesticide*lg_A.con + lg_A.het + lg_S.con + lg_S.het + 
+                        census + site + (1+census|quad.unique) + (1|sp.), data=pest.surv.dat1, family=binomial)
+summary(mod.surv2_rf, correlation=FALSE)
+
+# excluding the bigest adults improve the model fitting
+
+
+##--------------------- bootstrap -------------------##
+surv.newdat1 <-  with(pest.surv.dat1, 
+                      expand.grid(lg_A.con=seq(min(lg_A.con), max(lg_A.con), length=100),
+                                  pesticide=c("W", "F", "I"), 
+                                  lg_height0=mean(lg_height0), lg_A.het=mean(lg_A.het),
+                                  lg_S.con=mean(lg_S.con), lg_S.het=mean(lg_S.het)))
+dim(surv.newdat1)
+
+
+## prediction
+# not run
+# surv.newdat1$mean.pred <- predict(mod.surv2_rf, surv.newdat1, re.form=~0, type='response')
+
+
+# not work
+# because we also include census and site as fixed effects in the model, 
+# but we are no interested in these two variables in our prediction process
+
+
+# one possible solution is exclude the census and site as the fixed effects and refit a new model
+# alternatively, we can adopt a new method to generate the predicted values.
+
+
+
+
+##---------------- lappy approach ------------------------##
+
+# First, let's start with the mod.surv2_tf
+
+
+## https://stats.idre.ucla.edu/r/dae/mixed-effects-logistic-regression/
+## test the pesticide treatments together
+# temporary data 
+surv.tmpdat1 <- pest.surv.dat1[, c("lg_height0", "pesticide", "lg_A.con", "lg_A.het",
+                                   "lg_S.con", "lg_S.het", "census", "site", "quad.unique", "sp.")]
+dim(surv.tmpdat1)
+
+
+surv.jvalues1 <- with(pest.surv.dat1, seq(from = min(lg_A.con), to = max(lg_A.con), length.out = 100))
+
+
+# calculate predicted probabilities and store in a list 
+# not run
+# surv.biprobs1 <- lapply(levels(pest.surv.dat1$pesticide), function(treat) 
+#	{surv.tmpdat1$pesticide[] <- treat 
+#	lapply(surv.jvalues1, function(j) {
+#	surv.tmpdat1$lg_A.con <- j 
+# predict(mod.surv2_rf, newdata = surv.tmpdat1, type = "response", re.form=~0) 
+# include the random-effect
+#	predict(mod.surv2_rf, newdata = surv.tmpdat1, type = "response") 
+#  }) 
+# })
+
+
+# meet an error
+
+```
+
+I suppose the issue above may due to the random-slope effect, this can be solved vai using re.form=~0 in the prediction. However, I should consider the random-effect in the predition because I noticed that the one without considering random-effect performs poorly in the recruitment (please check this in the recruitment analysis).
+
+#### Robi comment
+You want to make predictions for any value of the random effect, not just the ones in your model, so I'd agree that you should fit the model with re.form=~0. But yes, as you say, the prediction made that way will probably not fit the data to nicely. THat is because there is variation due to the random effects that you are seeing in the data, but not in the model predictions. What we need to do is make the prediction without random effects, or site and census for that matter, and then also filter out the random effects noise from the data. That requires a little bit of annoying code, but I think it is worth it. Here is how I'd do this
+
+```{r robicode}
+## generate the data to predict on
+surv.newdat_robi <-  with(pest.surv.dat1, 
+                      expand.grid(lg_A.con=seq(min(lg_A.con), max(lg_A.con), length=100),
+                                  pesticide=c("W", "F", "I"), 
+                                  lg_height0=mean(lg_height0), lg_A.het=mean(lg_A.het),
+                                  lg_S.con=mean(lg_S.con), lg_S.het=mean(lg_S.het))) ## same as your code
+
+## now turn it into a design matrix, using the same formula as the model (I'm using mod.surv2 here as you say it is the best one), but removing the nuisance variables.
+
+# modmat_pred <- model.matrix(~pesticide * lg_A.con + lg_A.het + lg_S.con +  lg_S.het, data=surv.newdat_robi) 
+modmat_pred <- model.matrix(~pesticide * lg_A.con + lg_A.het + lg_S.con + lg_S.het +lg_height0,
+                            data=surv.newdat_robi) 
+
+fixef_pred <- fixef(mod.surv2)[c("(Intercept)", "pesticideF", "pesticideI",                         
+                                 "lg_A.con", "lg_A.het", "lg_S.con", "lg_S.het","lg_height0",
+                                 "pesticideF:lg_A.con", "pesticideI:lg_A.con")]
+
+
+length(fixef_pred); ncol(modmat_pred)
+## if I've done this right, then the length of fixef_pred should be 
+## equal to number of columns of modmat_pred, and the names in both of them are in the same order
+## If not, check the formulas and selection I've made to see they line up.
+
+
+surv_pred <- plogis(modmat_pred %*% fixef_pred) ## these are the predictions.
+
+## You can wrap all this into a bootstrap to get the confidence intervals.
+
+## now we want to add the data to the figures, but after accounting for any variation
+## due to site, census etc. There is a really easy way to do that!
+
+## observations are predictions + residuals
+## so if we make a prediction after taking out the predictors we are not interested in
+## from the predictions, but leave them in the model from which we extract the errors, they
+## are effctively removed from the error
+
+## here's how to do that.
+modmat_obs <- model.matrix(~pesticide * lg_A.con + lg_A.het + lg_S.con +  lg_S.het, 
+                           data=pest.surv.data1) ## the data is the only thing 
+
+
+
+# that changes from line 200 above
+
+## and here, the only difference from line 212 is that you are adding the residuals from the model
+clean_obs <- plogis(modmat_obs %*% fixef_pred + resid(mod.surv2))
+
+## Now you have both data with error + predictions on the real data and predictions for the range of covariates
+## you are interested in!
+
+```
+
+
+
+
+#### Shihong's code modified from Robi's
+```{r shihongcode}
+## Instead of A.con < 3000, we include all individuals
+
+## generate the data to predict on
+surv.newdat_robi <-  with(pest.surv.dat, 
+                      expand.grid(lg_A.con=seq(min(lg_A.con), max(lg_A.con), length=100),
+                                  pesticide=c("W", "F", "I"), 
+                                  lg_height0=mean(lg_height0), lg_A.het=mean(lg_A.het),
+                                  lg_S.con=mean(lg_S.con), lg_S.het=mean(lg_S.het))) ## same as your code
+
+## now turn it into a design matrix, using the same formula as the model (I'm using mod.surv2 here as you say it is the best one), but removing the nuisance variables.
+
+# modmat_pred <- model.matrix(~pesticide * lg_A.con + lg_A.het + lg_S.con + lg_S.het +lg_height0,
+#                            data=surv.newdat_robi) 
+modmat_pred <- model.matrix(~pesticide * lg_A.con + lg_A.het + lg_S.con + lg_S.het + lg_height0,
+                            data=surv.newdat_robi)
+
+fixef_pred <- fixef(mod.surv2_sz)[c("(Intercept)", "pesticideF", "pesticideI",                         
+                                 "lg_A.con", "lg_A.het", "lg_S.con", "lg_S.het","lg_height0",
+                                 "pesticideF:lg_A.con", "pesticideI:lg_A.con")]
+
+
+length(fixef_pred); ncol(modmat_pred)
+## if I've done this right, then the length of fixef_pred should be 
+## equal to number of columns of modmat_pred, and the names in both of them are in the same order
+## If not, check the formulas and selection I've made to see they line up.
+
+
+surv_pred <- plogis(modmat_pred %*% fixef_pred) ## these are the predictions.
+summary(surv_pred)
+
+
+## You can wrap all this into a bootstrap to get the confidence intervals.
+
+
+
+# bootstrapping without including census and site 
+# not run
+boot.surv <- bootMer(mod.surv2_sz, FUN=function(x)
+		predict(x, surv.newdat_robi, re.form=~0), nsim=5)
+
+
+
+## now we want to add the data to the figures, but after accounting for any variation
+## due to site, census etc. There is a really easy way to do that!
+
+## observations are predictions + residuals
+## so if we make a prediction after taking out the predictors we are not interested in
+## from the predictions, but leave them in the model from which we extract the errors, they
+## are effctively removed from the error
+
+## here's how to do that.
+
+
+modmat_obs <- model.matrix(~pesticide * lg_A.con + lg_A.het + lg_S.con +  lg_S.het + lg_height0, 
+                           data=pest.surv.dat) ## the data is the only thing 
+
+# that changes from line 200 above
+
+length(fixef_pred); ncol(modmat_obs)
+
+## and here, the only difference from line 212 is that you are adding the residuals from the model
+clean_obs <- plogis(modmat_obs %*% fixef_pred + resid(mod.surv2_sz))
+
+## Now you have both data with error + predictions on the real data and predictions for the range of covariates
+## you are interested in!
+
+
+
+## Now, present with the original x scale
+
+# predicted dataset
+surv.newdat_robi$surv_pred <- surv_pred
+summary(surv.newdat_robi)
+
+# observed dataset
+clean_obs <- as.numeric(clean_obs)
+pest.surv.dat$surv_obs <- clean_obs
+str(pest.surv.dat)
+
+
+# back to the original data of x
+mean_logx <- mean(log(pest.surv.dat$A.con + 1))
+sd_logx <- sd(log(pest.surv.dat$A.con + 1))
+surv.newdat_robi$x <- exp((surv.newdat_robi$lg_A.con*sd_logx) + mean_logx)-1
+
+# relevel the pesticide treatment
+surv.newdat_robi$pesticide <- factor(surv.newdat_robi$pesticide, levels=c("W","F","I"))
+
+
+## plot
+ggplot() + 
+  geom_line(data=surv.newdat_robi, aes(x = x, y = surv_pred, color=pesticide),size=1) +
+# geom_ribbon(data=surv.plotdat4, aes(x=x, ymin = Lower, ymax = Upper, fill = pesticide), alpha = 0.2)+
+  geom_point(data=pest.surv.dat,aes(x = A.con, y = surv_obs, color=pesticide)) +
+  scale_color_manual(values = c('gray40','orangered','darkblue'),
+  labels=c("Control","Fungicide","Insecticide")) + 
+  scale_fill_manual(values = c('gray40','orangered','darkblue'),
+  labels=c("Control","Fungicide","Insecticide")) +
+  labs(x="Conspecific adult density (m2)", y="Survival", 
+  colour="Pesticide",linetype="Pesticide", fill="Pesticide")
+
+
+
+## The observed points look really messy, we need to make the figure clearer
+## bin the x to 250 density
+
+# split the whole dataset to each treatment
+surv.w.pred.dat <- subset(surv.newdat_robi1, pesticide=='W')
+surv.f.pred.dat <- subset(surv.newdat_robi1, pesticide=='F')
+surv.i.pred.dat <- subset(surv.newdat_robi1, pesticide=='I')
+
+## plot
+p.surv.pred <- ggplot() + 
+  geom_line(data=surv.w.pred.dat, aes(x = x, y = surv_pred),color='gray40',size=1) +
+  geom_ribbon(data=surv.w.pred.dat, 
+              aes(x=x, ymin = lci.pred, ymax = uci.pred), fill = 'gray40', alpha = 0.2) +
+  geom_line(data=surv.f.pred.dat, aes(x = x, y = surv_pred), color='orangered',size=1) +
+  geom_ribbon(data=surv.f.pred.dat, 
+              aes(x=x, ymin = lci.pred, ymax = uci.pred), fill = 'orangered', alpha = 0.2) +
+  geom_line(data=surv.i.pred.dat, aes(x = x, y = surv_pred), color='limegreen',size=1) +
+  geom_ribbon(data=surv.i.pred.dat, 
+              aes(x=x, ymin = lci.pred, ymax = uci.pred), fill = 'limegreen', alpha = 0.2)
+
+
+## limit the x range according to the observed data
+p.surv.pred <- ggplot() + 
+  geom_line(data=surv.w.pred.dat, aes(x = x, y = surv_pred),color='gray40',size=1) +
+  geom_line(data=surv.f.pred.dat[surv.f.pred.dat$x <= 3100,], 
+            aes(x = x, y = surv_pred), color='orangered',size=1) +
+  geom_line(data=surv.i.pred.dat[surv.f.pred.dat$x <= 3600,],
+            aes(x = x, y = surv_pred), color='limegreen',size=1)
+
+
+
+
+## For the observed values, I use different densities to average the continious A.con
+## Let's say, 150, 200, 300, 400, 500
+
+## density=150
+surv.obs.dat <- pest.surv.dat
+range(surv.obs.dat$A.con)
+surv.obs.dat$A.con_cat <- cut(surv.obs.dat$A.con, seq(-1, 4350, 150))
+str(surv.obs.dat)
+
+
+surv.w.obs.dat <- subset(surv.obs.dat, pesticide=='W')
+surv.f.obs.dat <- subset(surv.obs.dat, pesticide=='F')
+surv.i.obs.dat <- subset(surv.obs.dat, pesticide=='I')
+
+table(surv.w.obs.dat$A.con_cat)
+surv.w.obs.cat.dat <- summarise(group_by(surv.w.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.f.obs.cat.dat <- summarise(group_by(surv.f.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.i.obs.cat.dat <- summarise(group_by(surv.i.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+
+# change the A.con_cat to continuous data
+surv.w.obs.cat.dat$x <- c(seq(75,2775,150),3075,3825,4275)
+surv.f.obs.cat.dat$x <- c(seq(75,2775,150))
+surv.i.obs.cat.dat$x <- c(seq(75,2325,150),2625,2775,2925,3075,3525)
+
+
+p.surv.pred +
+  geom_point(data=surv.w.obs.cat.dat,aes(x=x, y = mean), color='gray40',size=2) +
+  geom_errorbar(data=surv.w.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='gray40',width=0.1) +
+  geom_point(data=surv.f.obs.cat.dat,aes(x=x, y = mean), color='orangered',size=2) +
+  geom_errorbar(data=surv.f.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='orangered',width=0.1) +
+  geom_point(data=surv.i.obs.cat.dat,aes(x=x, y = mean), color='limegreen',size=2) +
+  geom_errorbar(data=surv.i.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se),
+                color='limegreen',width=0.1)+
+  labs(x="Conspecific adult density (m2)", y="Survival")
+
+
+
+## density=200
+surv.obs.dat <- pest.surv.dat
+range(surv.obs.dat$A.con)
+surv.obs.dat$A.con_cat <- cut(surv.obs.dat$A.con, seq(-1, 4400, 200))
+
+surv.w.obs.dat <- subset(surv.obs.dat, pesticide=='W')
+surv.f.obs.dat <- subset(surv.obs.dat, pesticide=='F')
+surv.i.obs.dat <- subset(surv.obs.dat, pesticide=='I')
+
+
+surv.w.obs.cat.dat <- summarise(group_by(surv.w.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.f.obs.cat.dat <- summarise(group_by(surv.f.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.i.obs.cat.dat <- summarise(group_by(surv.i.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+# change the A.con_cat to continuous data
+table(surv.w.obs.dat$A.con_cat)
+surv.w.obs.cat.dat$x <- c(seq(100,3100,200),3900,4300)
+table(surv.f.obs.dat$A.con_cat)
+surv.f.obs.cat.dat$x <- c(seq(100,2900,200))
+table(surv.i.obs.dat$A.con_cat)
+surv.i.obs.cat.dat$x <- c(seq(100,3100,200),3500)
+
+
+p.surv.pred +
+  geom_point(data=surv.w.obs.cat.dat,aes(x=x, y = mean), color='gray40',size=2) +
+  geom_errorbar(data=surv.w.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='gray40',width=0.1) +
+  geom_point(data=surv.f.obs.cat.dat,aes(x=x, y = mean), color='orangered',size=2) +
+  geom_errorbar(data=surv.f.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='orangered',width=0.1) +
+  geom_point(data=surv.i.obs.cat.dat,aes(x=x, y = mean), color='limegreen',size=2) +
+  geom_errorbar(data=surv.i.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se),
+                color='limegreen',width=0.1)+
+  labs(x="Conspecific adult density (m2)", y="Survival")
+
+
+
+## density=300
+surv.obs.dat <- pest.surv.dat
+range(surv.obs.dat$A.con)
+surv.obs.dat$A.con_cat <- cut(surv.obs.dat$A.con, seq(-1, 4500, 300))
+
+
+surv.w.obs.dat <- subset(surv.obs.dat, pesticide=='W')
+surv.f.obs.dat <- subset(surv.obs.dat, pesticide=='F')
+surv.i.obs.dat <- subset(surv.obs.dat, pesticide=='I')
+
+
+surv.w.obs.cat.dat <- summarise(group_by(surv.w.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.f.obs.cat.dat <- summarise(group_by(surv.f.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.i.obs.cat.dat <- summarise(group_by(surv.i.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+# change the A.con_cat to continuous data
+table(surv.w.obs.dat$A.con_cat)
+surv.w.obs.cat.dat$x <- c(seq(150,3150,300),3750,4350)
+table(surv.f.obs.dat$A.con_cat)
+surv.f.obs.cat.dat$x <- c(seq(150,2850,300))
+table(surv.i.obs.dat$A.con_cat)
+surv.i.obs.cat.dat$x <- c(seq(150,3450,300))
+
+
+p.surv.pred +
+  geom_point(data=surv.w.obs.cat.dat,aes(x=x, y = mean), color='gray40',size=2) +
+  geom_errorbar(data=surv.w.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='gray40',width=0.1) +
+  geom_point(data=surv.f.obs.cat.dat,aes(x=x, y = mean), color='orangered',size=2) +
+  geom_errorbar(data=surv.f.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='orangered',width=0.1) +
+  geom_point(data=surv.i.obs.cat.dat,aes(x=x, y = mean), color='limegreen',size=2) +
+  geom_errorbar(data=surv.i.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se),
+                color='limegreen',width=0.1)+
+  labs(x="Conspecific adult density (m2)", y="Survival")
+
+
+
+## density=400
+surv.obs.dat <- pest.surv.dat
+range(surv.obs.dat$A.con)
+surv.obs.dat$A.con_cat <- cut(surv.obs.dat$A.con, seq(-1, 4400, 400))
+
+
+surv.w.obs.dat <- subset(surv.obs.dat, pesticide=='W')
+surv.f.obs.dat <- subset(surv.obs.dat, pesticide=='F')
+surv.i.obs.dat <- subset(surv.obs.dat, pesticide=='I')
+
+surv.w.obs.cat.dat <- summarise(group_by(surv.w.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.f.obs.cat.dat <- summarise(group_by(surv.f.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.i.obs.cat.dat <- summarise(group_by(surv.i.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+
+# change the A.con_cat to continuous data
+table(surv.w.obs.dat$A.con_cat)
+surv.w.obs.cat.dat$x <- c(seq(200,3000,400),3800,4200)
+table(surv.f.obs.dat$A.con_cat)
+surv.f.obs.cat.dat$x <- c(seq(200,3000,400))
+table(surv.i.obs.dat$A.con_cat)
+surv.i.obs.cat.dat$x <- c(seq(200,3400,400))
+
+
+p.surv.pred +
+  geom_point(data=surv.w.obs.cat.dat,aes(x=x, y = mean), color='gray40',size=2) +
+  geom_errorbar(data=surv.w.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='gray40',width=0.1) +
+  geom_point(data=surv.f.obs.cat.dat,aes(x=x, y = mean), color='orangered',size=2) +
+  geom_errorbar(data=surv.f.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='orangered',width=0.1) +
+  geom_point(data=surv.i.obs.cat.dat,aes(x=x, y = mean), color='limegreen',size=2) +
+  geom_errorbar(data=surv.i.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se),
+                color='limegreen',width=0.1)+
+  labs(x="Conspecific adult density (m2)", y="Survival")
+
+
+
+## density=500
+surv.obs.dat <- pest.surv.dat
+range(surv.obs.dat$A.con)
+surv.obs.dat$A.con_cat <- cut(surv.obs.dat$A.con, seq(-1, 4500, 500))
+
+
+surv.w.obs.dat <- subset(surv.obs.dat, pesticide=='W')
+surv.f.obs.dat <- subset(surv.obs.dat, pesticide=='F')
+surv.i.obs.dat <- subset(surv.obs.dat, pesticide=='I')
+
+
+surv.w.obs.cat.dat <- summarise(group_by(surv.w.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.f.obs.cat.dat <- summarise(group_by(surv.f.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.i.obs.cat.dat <- summarise(group_by(surv.i.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+# change the A.con_cat to continuous data
+table(surv.w.obs.dat$A.con_cat)
+surv.w.obs.cat.dat$x <- c(seq(250,4250,500))
+table(surv.f.obs.dat$A.con_cat)
+surv.f.obs.cat.dat$x <- c(seq(250,2750,500))
+table(surv.i.obs.dat$A.con_cat)
+surv.i.obs.cat.dat$x <- c(seq(250,3250,500))
+
+p.surv.pred +
+  geom_point(data=surv.w.obs.cat.dat,aes(x=x, y = mean), color='gray40',size=2) +
+  geom_errorbar(data=surv.w.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='gray40',width=0.1) +
+  geom_point(data=surv.f.obs.cat.dat,aes(x=x, y = mean), color='orangered',size=2) +
+  geom_errorbar(data=surv.f.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='orangered',width=0.1) +
+  geom_point(data=surv.i.obs.cat.dat,aes(x=x, y = mean), color='limegreen',size=2) +
+  geom_errorbar(data=surv.i.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se),
+                color='limegreen',width=0.1)+
+  labs(x="Conspecific adult density (m2)", y="Survival")
+
+
+
+## How about using differen range of density across the A.con?
+# density=100 when A.con is between 0 and 1000
+# density=200 when A.con is between 1000 and 2000,
+# density=400 when A.con is between 2000 and 4400.
+## density=400
+surv.obs.dat1 <- subset(pest.surv.dat, A.con<=1000)
+surv.obs.dat2 <- subset(pest.surv.dat, A.con>1000 & A.con <= 2000)
+surv.obs.dat3 <- subset(pest.surv.dat, A.con>2000 & A.con <= 4400)
+
+surv.obs.dat1$A.con_cat <- cut(surv.obs.dat1$A.con, seq(0, 1000, 100), include.lowest=TRUE)
+surv.obs.dat2$A.con_cat <- cut(surv.obs.dat2$A.con, seq(1000, 2000, 200), include.lowest=TRUE)
+surv.obs.dat3$A.con_cat <- cut(surv.obs.dat3$A.con, seq(2000, 4400, 400), include.lowest=TRUE)
+
+surv.obs.dat <- rbind.data.frame(surv.obs.dat1, surv.obs.dat2, surv.obs.dat3)
+
+surv.w.obs.dat <- subset(surv.obs.dat, pesticide=='W')
+surv.f.obs.dat <- subset(surv.obs.dat, pesticide=='F')
+surv.i.obs.dat <- subset(surv.obs.dat, pesticide=='I')
+range(surv.f.obs.dat$A.con)
+range(surv.i.obs.dat$A.con)
+
+
+surv.w.obs.cat.dat <- summarise(group_by(surv.w.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.f.obs.cat.dat <- summarise(group_by(surv.f.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+surv.i.obs.cat.dat <- summarise(group_by(surv.i.obs.dat, A.con_cat), 
+                           mean = mean(surv_obs), se=sd(surv_obs)/sqrt(length(surv_obs)))
+
+
+# change the A.con_cat to continuous data
+table(surv.w.obs.dat$A.con_cat)
+surv.w.obs.cat.dat$x <- c(seq(50,950,100),seq(1100,1900,200),seq(2200,3000,400),3800,4200)
+table(surv.f.obs.dat$A.con_cat)
+surv.f.obs.cat.dat$x <- c(seq(50,950,100),seq(1100,1900,200),seq(2200,3000,400))
+table(surv.i.obs.dat$A.con_cat)
+surv.i.obs.cat.dat$x <- c(seq(50,950,100),seq(1100,1900,200),seq(2200,3400,400))
+
+
+p.surv.pred +
+  geom_point(data=surv.w.obs.cat.dat,aes(x=x, y = mean), color='gray40',size=2) +
+  geom_errorbar(data=surv.w.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='gray40',width=0.1) +
+  geom_point(data=surv.f.obs.cat.dat,aes(x=x, y = mean), color='orangered',size=2) +
+  geom_errorbar(data=surv.f.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se), 
+                color='orangered',width=0.1) +
+  geom_point(data=surv.i.obs.cat.dat,aes(x=x, y = mean), color='limegreen',size=2) +
+  geom_errorbar(data=surv.i.obs.cat.dat,aes(x=x, ymin=mean-se, ymax=mean+se),
+                color='limegreen',width=0.1)+
+  labs(x="Conspecific adult density (m2)", y="Survival")
+
+
+
+```
+
